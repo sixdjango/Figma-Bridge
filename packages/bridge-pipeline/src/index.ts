@@ -1,7 +1,10 @@
 export { figmaToHtml } from './public-api/figmaToHtml';
+export { figmaToReact } from './public-api/figmaToReact';
+export type { FigmaToReactOptions, ReactComponentFile, FigmaToReactResult } from './public-api/figmaToReact';
 // Expose IR builder for upstream needs (e.g., inspector/sidebar trees)
 export { compositionToIR } from './pipeline/ir';
 export { normalizeComposition } from './utils/normalize';
 export { normalizeHtml } from './utils/htmlPost';
 export { extractFontsFromComposition, FontCollector } from './utils/fonts';
 export type { FigmaNode, CompositionInput, FigmaVec2, FigmaRect, FigmaStyle, FigmaPaint, FigmaEffect, FigmaText, FigmaTextSegment } from './types/figma';
+export type { CustomComponentDef } from './pipeline/types';
