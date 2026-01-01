@@ -57,6 +57,17 @@ export type ChildrenContent = { type: 'children'; nodes: RenderNodeIR[] };
 export type EmptyContent = { type: 'empty' };
 export type Content = TextContent | SvgContent | ChildrenContent | EmptyContent;
 
+export type CustomComponentImportWay = 'DEFAULT' | 'NAMED' | string;
+export type CustomComponentType = 'NORMAL' | 'SLICE' | string;
+export type CustomComponentDef = {
+  nodeID: string;
+  type: string;
+  componentType?: CustomComponentType;
+  props?: Record<string, any>;
+  fromLib?: string;
+  importWay?: CustomComponentImportWay;
+};
+
 export type RenderNodeIR = {
   id: string;
   kind: 'frame' | 'shape' | 'text' | 'svg';
@@ -72,7 +83,12 @@ export type RenderNodeIR = {
   svgContent?: string;
   svgFile?: string;
   text?: any;
+  customComponent?: CustomComponentDef;
 };
+
+export type ReactImport = { name: string; path: string; importKind?: 'default' | 'named'; kind?: 'default' | 'named' };
+export type ReactComponentAsset = { name: string; jsx: string; css: string; imports: ReactImport[] };
+export type ReactBuildResult = { layout: ReactComponentAsset; slices?: ReactComponentAsset[] };
 
 export type Viewport = { width: number; height: number; offsetX: number; offsetY: number };
 export type Bounds = { width: number; height: number };
@@ -118,6 +134,8 @@ export type RenderBoxConfig = {
   boxCss: string;
   innerContent: string;
   options?: RenderBoxOptions;
+  tagName?: string;
+  customAttributes?: Record<string, string>;
 };
 
 export type PreviewBuildInput = {
