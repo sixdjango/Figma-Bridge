@@ -1,4 +1,4 @@
-import type { RenderNodeIR, DocumentConfig, Viewport, Bounds, Rect, RenderBoxConfig, PreviewBuildInput, LayoutCssOmit } from './types';
+import type { RenderNodeIR, DocumentConfig, Viewport, Bounds, Rect, RenderBoxConfig, PreviewBuildInput, LayoutCssOmit, CustomComponentDef } from './types';
 import { CssCollector } from '../utils/cssCollector';
 import { buildSharedClasses, generateClassCss } from '../utils/classExtractor';
 import { optimizeBoxCss } from '../utils/css-optimizer';
@@ -96,6 +96,63 @@ function h(tag: string, attrs: Record<string, string | number | undefined> | nul
     : '';
   const inner = Array.isArray(children) ? children.join('') : (children || '');
   return `<${tag}${attrStr}>${inner}</${tag}>`;
+}
+
+function mergeAttrs(base: Record<string, string>, extra?: Record<string, string>): Record<string, string> {
+  const merged: Record<string, string> = {};
+  if (extra) {
+    for (const [k, v] of Object.entries(extra)) {
+      if (v === undefined || v === null) continue;
+      merged[k] = String(v);
+    }
+  }
+
+  if (base.class) {
+    merged.class = merged.class ? `${merged.class} ${base.class}` : base.class;
+  }
+  if (base.style) {
+    merged.style = merged.style ? `${merged.style};${base.style}` : base.style;
+  }
+  for (const [k, v] of Object.entries(base)) {
+    if (k === 'class' || k === 'style') continue;
+    merged[k] = String(v);
+  }
+  return merged;
+}
+
+function stringifyAttrValue(v: any): string | undefined {
+  if (v === undefined || v === null) return undefined;
+  if (typeof v === 'string') return v;
+  if (typeof v === 'number' || typeof v === 'boolean') return String(v);
+  try {
+    return JSON.stringify(v);
+  } catch {
+    return undefined;
+  }
+}
+
+function buildCustomComponentAttrs(def?: CustomComponentDef): { tagName?: string; attrs?: Record<string, string> } {
+  if (!def || typeof def.type !== 'string' || !def.type.trim()) return {};
+  const attrs: Record<string, string> = {};
+  if (def.componentType) attrs['data-component-type'] = String(def.componentType);
+  if (def.fromLib) attrs['data-component-lib'] = String(def.fromLib);
+  if (def.importWay) attrs['data-import-way'] = String(def.importWay);
+  if (def.props && typeof def.props === 'object') {
+    for (const [k, v] of Object.entries(def.props)) {
+      if (!k) continue;
+      const val = stringifyAttrValue(v);
+      if (val !== undefined) attrs[k] = val;
+    }
+  }
+  return { tagName: def.type, attrs };
+}
+
+function applyCustomComponent(cfg: RenderBoxConfig, def?: CustomComponentDef): void {
+  const { tagName, attrs } = buildCustomComponentAttrs(def);
+  if (tagName) cfg.tagName = tagName;
+  if (attrs && Object.keys(attrs).length > 0) {
+    cfg.customAttributes = cfg.customAttributes ? { ...cfg.customAttributes, ...attrs } : attrs;
+  }
 }
 
 function layoutToCss(layout: RenderNodeIR['layout'], omit?: LayoutCssOmit): {
@@ -399,8 +456,10 @@ function renderWrapperBox(cfg: RenderBoxConfig): string {
   if (opts?.mode === 'debug') attrs['data-layer-id'] = id;
   const innerAttrs: Record<string, string> = { class: innerClass + innerClassExtra, style: inner };
   if (opts?.mode === 'content' && opts?.hasStroke) innerAttrs['data-layer-id'] = id;
+  const tagName = cfg.tagName || 'div';
+  const mergedInnerAttrs = mergeAttrs(innerAttrs, cfg.customAttributes);
 
-  return h('div', attrs, h('div', innerAttrs, innerContent));
+  return h('div', attrs, h(tagName, mergedInnerAttrs, innerContent));
 }
 
 function renderSingleBox(cfg: RenderBoxConfig): string {
@@ -427,7 +486,9 @@ function renderSingleBox(cfg: RenderBoxConfig): string {
   const attrs: Record<string, string> = { class: className, style };
   if (opts?.mode === 'debug') attrs['data-layer-id'] = id;
   else if (opts?.mode === 'content' && opts?.hasStroke) attrs['data-layer-id'] = id;
-  return h('div', attrs, innerContent);
+  const mergedAttrs = mergeAttrs(attrs, cfg.customAttributes);
+  const tagName = cfg.tagName || 'div';
+  return h(tagName, mergedAttrs, innerContent);
 }
 
 function maybeWrapWithContentBox(cfg: RenderBoxConfig): string {
@@ -502,14 +563,16 @@ async function renderFrameNode(ctx: RenderContext): Promise<string> {
   }
   const omitPosition = ctx.omitPositionOverride || (!hasWrapper && layout.position === 'relative' && ctx.mode === 'content' && !hasAbsoluteDescendant(ctx.irNode));
   const hasStroke = !!(ctx.irNode.style.raw?.strokes && ctx.irNode.style.raw.strokes.length > 0);
-  return maybeWrapWithContentBox({
+  const cfg: RenderBoxConfig = {
     className,
     id: ctx.irNode.id,
     layout,
     boxCss,
     innerContent: innerHtml,
     options: { outerOverflowVisible: true, innerClassName: ctx.mode === 'debug' ? 'debug-box' : undefined, debugOverrideSize, omitPosition, mode: ctx.mode, hasStroke, layoutOmit }
-  });
+  };
+  applyCustomComponent(cfg, ctx.irNode.customComponent);
+  return maybeWrapWithContentBox(cfg);
 }
 
 async function renderTextNode(ctx: RenderContext): Promise<string> {
@@ -564,14 +627,16 @@ async function renderTextNode(ctx: RenderContext): Promise<string> {
   const debugOverrideSize = false;
   const omitPosition = ctx.omitPositionOverride || (!hasWrapper && ctx.irNode.layout.position === 'relative' && ctx.mode === 'content' && !hasAbsoluteDescendant(ctx.irNode));
   const hasStroke = !!(ctx.irNode.style.raw?.strokes && ctx.irNode.style.raw.strokes.length > 0);
-  return maybeWrapWithContentBox({
+  const cfg: RenderBoxConfig = {
     className,
     id: ctx.irNode.id,
     layout: ctx.irNode.layout,
     boxCss,
     innerContent: textHtml,
     options: { innerClassName: ctx.mode === 'debug' ? 'debug-box' : undefined, debugOverrideSize, omitPosition, mode: ctx.mode, hasStroke, layoutOmit }
-  });
+  };
+  applyCustomComponent(cfg, ctx.irNode.customComponent);
+  return maybeWrapWithContentBox(cfg);
 }
 
 async function renderSvgNode(ctx: RenderContext): Promise<string> {
@@ -633,14 +698,16 @@ async function renderSvgNode(ctx: RenderContext): Promise<string> {
       itemCss = itemCss.replace(/(^|;)\s*flex-shrink\s*:\s*0\s*;?/ig, '$1');
     }
   }
-  return maybeWrapWithContentBox({
+  const cfg: RenderBoxConfig = {
     className,
     id: ctx.irNode.id,
     layout: ctx.irNode.layout,
     boxCss: itemCss,
     innerContent: finalContentHtml,
     options: { innerClassName: ctx.mode === 'debug' ? 'debug-box' : undefined, debugOverrideSize, mode: ctx.mode }
-  });
+  };
+  applyCustomComponent(cfg, ctx.irNode.customComponent);
+  return maybeWrapWithContentBox(cfg);
 }
 
 async function renderShapeNode(ctx: RenderContext): Promise<string> {
@@ -684,14 +751,16 @@ async function renderShapeNode(ctx: RenderContext): Promise<string> {
   const debugOverrideSize = ctx.mode === 'debug' ? !hasWrapper : false;
   const omitPosition = ctx.omitPositionOverride || (!hasWrapper && ctx.irNode.layout.position === 'relative' && ctx.mode === 'content' && !hasAbsoluteDescendant(ctx.irNode));
   const hasStroke = !!(ctx.irNode.style.raw?.strokes && ctx.irNode.style.raw.strokes.length > 0);
-  return maybeWrapWithContentBox({
+  const cfg: RenderBoxConfig = {
     className,
     id: ctx.irNode.id,
     layout: ctx.irNode.layout,
     boxCss,
     innerContent: '',
     options: { innerClassName: ctx.mode === 'debug' ? 'debug-box' : undefined, debugOverrideSize, omitPosition, mode: ctx.mode, hasStroke }
-  });
+  };
+  applyCustomComponent(cfg, ctx.irNode.customComponent);
+  return maybeWrapWithContentBox(cfg);
 }
 
 async function renderNodeUnified(irNode: RenderNodeIR, ctx: RenderContext): Promise<string> {

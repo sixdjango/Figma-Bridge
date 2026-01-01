@@ -1,4 +1,4 @@
-import type { RenderNodeIR } from './types';
+import type { CustomComponentDef, RenderNodeIR } from './types';
 import { CssCollector } from '../utils/cssCollector';
 import { buildRenderItems, type RenderItem, type RenderNodeItem, type RenderMaskedItem } from '../utils/renderItems';
 import { getLayoutAxes, mapAlignItems } from '../utils/layout';
@@ -17,7 +17,8 @@ export function buildContent(
   cssCollector: CssCollector,
   inheritedShadows?: ShadowEffect[] | null,
   effectsMode?: 'self' | 'inherit',
-  flags?: { asFlexItem?: boolean }
+  flags?: { asFlexItem?: boolean },
+  componentMap?: Map<string, CustomComponentDef>
 ): any {
   if (kind === 'text' && node.text) {
     const html = renderTextSegments(node.text);
@@ -73,10 +74,10 @@ export function buildContent(
   for (const it of items) {
     if (it.kind === 'node') {
       const ch = children[(it as RenderNodeItem).index];
-      const childIR = processChildNode(ch, it as RenderNodeItem, ctx);
+      const childIR = processChildNode(ch, it as RenderNodeItem, ctx, componentMap);
       if (childIR) irKids.push(childIR);
     } else if (it.kind === 'masked') {
-      const maskedIRs = processMaskedGroup(it as RenderMaskedItem, ctx);
+      const maskedIRs = processMaskedGroup(it as RenderMaskedItem, ctx, componentMap);
       irKids.push(...maskedIRs);
     }
   }
@@ -96,7 +97,8 @@ function processChildNode(
     subtree: FigmaNode;
     cssCollector: CssCollector;
     nextInherited: ShadowEffect[];
-  }
+  },
+  componentMap?: Map<string, CustomComponentDef>
 ): RenderNodeIR | null {
   if (!ch || ch.visible === false) return null;
   const isFlexItem = ctx.parentIsAutoLayout && String(ch?.layoutPositioning || 'AUTO').toUpperCase() !== 'ABSOLUTE';
@@ -105,7 +107,8 @@ function processChildNode(
     ctx.parentForChildrenAbs,
     ctx.cssCollector,
     ctx.nextInherited,
-    isFlexItem ? { asFlexItem: true, parentAxes: ctx.parentAxes, parentAlignItemsCss: ctx.parentAlignItemsCss, parentWrap: ctx.subtree?.layoutWrap } : undefined
+    isFlexItem ? { asFlexItem: true, parentAxes: ctx.parentAxes, parentAlignItemsCss: ctx.parentAlignItemsCss, parentWrap: ctx.subtree?.layoutWrap } : undefined,
+    componentMap
   );
   if (ir && it && typeof (it as any).itemCss === 'string' && (it as any).itemCss) {
     const extra = String((it as any).itemCss);
@@ -127,7 +130,8 @@ function processMaskedGroup(
     subtree: FigmaNode;
     cssCollector: CssCollector;
     nextInherited: ShadowEffect[];
-  }
+  },
+  componentMap?: Map<string, CustomComponentDef>
 ): RenderNodeIR[] {
   const mask = ctx.children[it.maskIndex];
   if (!mask) throw new Error('processMaskedGroup: mask node missing');
@@ -167,7 +171,7 @@ function processMaskedGroup(
       transform2x2: { a: a2, b: b2, c: c2, d: d2 },
     },
     style: { boxCss: parts.join('') },
-    content: { type: 'children', nodes: maskedNodes.map(ch => nodeToIR(ch, mask.absoluteTransform as number[][], ctx.cssCollector, ctx.nextInherited)) },
+    content: { type: 'children', nodes: maskedNodes.map(ch => nodeToIR(ch, mask.absoluteTransform as number[][], ctx.cssCollector, ctx.nextInherited, undefined, componentMap)) },
     isMask: true,
     absoluteTransform: Array.isArray(mask?.absoluteTransform) ? mask.absoluteTransform : undefined,
     name: mask.name || 'Mask Container',
