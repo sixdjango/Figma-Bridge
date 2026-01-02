@@ -100,27 +100,41 @@ function h(tag: string, attrs: Record<string, string | number | undefined> | nul
 
 function mergeAttrs(base: Record<string, string>, extra?: Record<string, string>): Record<string, string> {
   const merged: Record<string, string> = {};
+
+  // First, copy all base attributes
+  for (const [k, v] of Object.entries(base)) {
+    if (k === 'class' || k === 'style') continue;
+    merged[k] = String(v);
+  }
+
+  // Set base class and style first
+  if (base.class) {
+    merged.class = base.class;
+  }
+  if (base.style) {
+    merged.style = base.style;
+  }
+
+  // Then apply extra (props) attributes - these have higher priority
   if (extra) {
     for (const [k, v] of Object.entries(extra)) {
       if (v === undefined || v === null) continue;
       // Convert className to class for HTML output
       const key = k === 'className' ? 'class' : k;
-      merged[key] = String(v);
+
+      if (key === 'class') {
+        // Merge class: extra classes come after base classes
+        merged.class = merged.class ? `${merged.class} ${v}` : String(v);
+      } else if (key === 'style') {
+        // Merge style: extra styles come after base styles (higher priority)
+        merged.style = merged.style ? `${merged.style};${v}` : String(v);
+      } else {
+        // Other attributes: extra overrides base
+        merged[key] = String(v);
+      }
     }
   }
 
-  // Merge class/className: base classes come after extra classes
-  if (base.class) {
-    merged.class = merged.class ? `${merged.class} ${base.class}` : base.class;
-  }
-  // Merge style: base styles come after extra styles (extra styles can be overridden)
-  if (base.style) {
-    merged.style = merged.style ? `${merged.style};${base.style}` : base.style;
-  }
-  for (const [k, v] of Object.entries(base)) {
-    if (k === 'class' || k === 'style') continue;
-    merged[k] = String(v);
-  }
   return merged;
 }
 
