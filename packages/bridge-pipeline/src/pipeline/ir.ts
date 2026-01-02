@@ -11,11 +11,28 @@ import { computeLayout } from '../utils/layout-calculator';
 import { buildContent } from './content-builder';
 import { computeEffectsMode, shouldInheritShadows } from '../utils/effects-mode';
 import type { FigmaNode, CompositionInput } from '../types/figma';
+import type { ComponentMapping, ResolvedComponent } from '../types/component';
 
-export function compositionToIR(composition: CompositionInput | { absOrigin?: { x: number; y: number }; children?: FigmaNode[] }): { nodes: RenderNodeIR[]; cssRules: string; rawComposition: any; renderUnion: { x: number; y: number; width: number; height: number }; fontMeta: { fonts: { family: string; weights: number[]; styles: string[] }[] }; assetMeta: { images: string[]; svgs?: string[] } } {
+export type CompositionToIROptions = {
+  /** Component mappings for custom component rendering */
+  components?: ComponentMapping[];
+};
+
+export function compositionToIR(
+  composition: CompositionInput | { absOrigin?: { x: number; y: number }; children?: FigmaNode[] },
+  options?: CompositionToIROptions
+): { nodes: RenderNodeIR[]; cssRules: string; rawComposition: any; renderUnion: { x: number; y: number; width: number; height: number }; fontMeta: { fonts: { family: string; weights: number[]; styles: string[] }[] }; assetMeta: { images: string[]; svgs?: string[] } } {
   if (!composition || typeof composition !== 'object') throw new Error('Invalid composition');
   const children = Array.isArray(composition.children) ? composition.children : [];
   if (!children.length) return { nodes: [], cssRules: '', rawComposition: composition, renderUnion: { x: 0, y: 0, width: 0, height: 0 }, fontMeta: { fonts: [] }, assetMeta: { images: [] } };
+
+  // Build component mapping lookup by nodeID
+  const componentMap = new Map<string, ComponentMapping>();
+  if (options?.components) {
+    for (const comp of options.components) {
+      componentMap.set(comp.nodeID, comp);
+    }
+  }
 
   // Require upstream-provided absOrigin; no downstream guessing
   const absOrigin = composition.absOrigin;
@@ -42,7 +59,7 @@ export function compositionToIR(composition: CompositionInput | { absOrigin?: { 
 
   const nodes: RenderNodeIR[] = children
     .filter((n: FigmaNode) => n && n.visible !== false)
-    .map((child: FigmaNode) => nodeToIR(child, M_comp, cssCollector));
+    .map((child: FigmaNode) => nodeToIR(child, M_comp, cssCollector, undefined, undefined, componentMap));
 
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   children.forEach((ch: FigmaNode, index: number) => {
@@ -172,7 +189,8 @@ export function nodeToIR(
   parentAbs: number[][],
   cssCollector: CssCollector,
   inheritedShadows?: ShadowEffect[] | null,
-  flags?: { asFlexItem?: boolean; parentAxes?: ReturnType<typeof getLayoutAxes>; parentAlignItemsCss?: string | undefined; parentWrap?: string }
+  flags?: { asFlexItem?: boolean; parentAxes?: ReturnType<typeof getLayoutAxes>; parentAlignItemsCss?: string | undefined; parentWrap?: string },
+  componentMap?: Map<string, ComponentMapping>
 ): RenderNodeIR {
   if (!node) throw new Error('nodeToIR called with null/undefined node');
   if (node.visible === false) throw new Error(`Invisible node ${node.id} should have been filtered upstream`);
@@ -180,9 +198,26 @@ export function nodeToIR(
   const { kind, layout } = computeLayout(node, parentAbs, flags);
   const mode = computeEffectsMode(node);
   const style = collectStyle(node, kind, cssCollector, inheritedShadows, mode);
-  const content = buildContent(node, kind, parentAbs, cssCollector, inheritedShadows, mode, flags);
+  const content = buildContent(node, kind, parentAbs, cssCollector, inheritedShadows, mode, flags, componentMap);
   const rawStyle = buildRawStyle(node);
   const svgFileProp = svgIdToFile(node);
+
+  // Check if this node has a component mapping
+  let resolvedComponent: ResolvedComponent | undefined;
+  if (componentMap) {
+    const mapping = componentMap.get(String(node.id));
+    if (mapping) {
+      resolvedComponent = {
+        tagName: mapping.type,
+        props: mapping.props,
+        isSlice: mapping.componentType === 'SLICE',
+        importInfo: {
+          from: mapping.fromLib,
+          importWay: mapping.importWay,
+        },
+      };
+    }
+  }
 
   return {
     id: String(node.id || 'unknown'),
@@ -199,5 +234,6 @@ export function nodeToIR(
     svgContent: node.svgContent,
     svgFile: svgFileProp,
     text: node.text,
+    component: resolvedComponent,
   };
 }

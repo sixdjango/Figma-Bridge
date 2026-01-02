@@ -1,3 +1,5 @@
+import type { ResolvedComponent } from '../types/component';
+
 export type Matrix2x3 = number[][];
 
 export type LayoutInfo = {
@@ -72,6 +74,8 @@ export type RenderNodeIR = {
   svgContent?: string;
   svgFile?: string;
   text?: any;
+  /** Component mapping for custom component rendering */
+  component?: ResolvedComponent;
 };
 
 export type Viewport = { width: number; height: number; offsetX: number; offsetY: number };

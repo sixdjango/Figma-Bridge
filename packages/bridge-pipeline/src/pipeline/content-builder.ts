@@ -9,6 +9,7 @@ import type { ShadowEffect } from '../utils/css';
 import { renderTextSegments, renderTextSegmentsWithClasses } from '../utils/css';
 import { nodeToIR } from './ir';
 import type { FigmaNode } from '../types/figma';
+import type { ComponentMapping } from '../types/component';
 
 export function buildContent(
   node: FigmaNode,
@@ -17,7 +18,8 @@ export function buildContent(
   cssCollector: CssCollector,
   inheritedShadows?: ShadowEffect[] | null,
   effectsMode?: 'self' | 'inherit',
-  flags?: { asFlexItem?: boolean }
+  flags?: { asFlexItem?: boolean },
+  componentMap?: Map<string, ComponentMapping>
 ): any {
   if (kind === 'text' && node.text) {
     const html = renderTextSegments(node.text);
@@ -67,6 +69,7 @@ export function buildContent(
     subtree,
     cssCollector,
     nextInherited,
+    componentMap,
   };
 
   const irKids: RenderNodeIR[] = [];
@@ -96,6 +99,7 @@ function processChildNode(
     subtree: FigmaNode;
     cssCollector: CssCollector;
     nextInherited: ShadowEffect[];
+    componentMap?: Map<string, ComponentMapping>;
   }
 ): RenderNodeIR | null {
   if (!ch || ch.visible === false) return null;
@@ -105,7 +109,8 @@ function processChildNode(
     ctx.parentForChildrenAbs,
     ctx.cssCollector,
     ctx.nextInherited,
-    isFlexItem ? { asFlexItem: true, parentAxes: ctx.parentAxes, parentAlignItemsCss: ctx.parentAlignItemsCss, parentWrap: ctx.subtree?.layoutWrap } : undefined
+    isFlexItem ? { asFlexItem: true, parentAxes: ctx.parentAxes, parentAlignItemsCss: ctx.parentAlignItemsCss, parentWrap: ctx.subtree?.layoutWrap } : undefined,
+    ctx.componentMap
   );
   if (ir && it && typeof (it as any).itemCss === 'string' && (it as any).itemCss) {
     const extra = String((it as any).itemCss);
@@ -127,6 +132,7 @@ function processMaskedGroup(
     subtree: FigmaNode;
     cssCollector: CssCollector;
     nextInherited: ShadowEffect[];
+    componentMap?: Map<string, ComponentMapping>;
   }
 ): RenderNodeIR[] {
   const mask = ctx.children[it.maskIndex];
@@ -167,7 +173,7 @@ function processMaskedGroup(
       transform2x2: { a: a2, b: b2, c: c2, d: d2 },
     },
     style: { boxCss: parts.join('') },
-    content: { type: 'children', nodes: maskedNodes.map(ch => nodeToIR(ch, mask.absoluteTransform as number[][], ctx.cssCollector, ctx.nextInherited)) },
+    content: { type: 'children', nodes: maskedNodes.map(ch => nodeToIR(ch, mask.absoluteTransform as number[][], ctx.cssCollector, ctx.nextInherited, undefined, ctx.componentMap)) },
     isMask: true,
     absoluteTransform: Array.isArray(mask?.absoluteTransform) ? mask.absoluteTransform : undefined,
     name: mask.name || 'Mask Container',
