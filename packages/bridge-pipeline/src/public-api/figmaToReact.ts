@@ -237,8 +237,8 @@ export async function figmaToReact(
 
   // STEP 3: Build slice components from extracted HTML
   const sliceOutputs: ReactComponentFile[] = [];
-  const localAssetImports = sharedAssetImports ?? (options.assetImportMode ? new Map<string, AssetImport>() : undefined);
-  const assetImportRefs = localAssetImports ? new Set<AssetImport>() : undefined;
+  // Shared asset import map for deduplication, but track refs separately per component
+  const globalAssetImports = sharedAssetImports ?? (options.assetImportMode ? new Map<string, AssetImport>() : undefined);
 
   for (const [nodeId, sliceInfo] of splitResult.slices) {
     const sliceDef = sliceDefinitions.get(nodeId);
@@ -247,18 +247,22 @@ export async function figmaToReact(
     const componentTags = buildComponentTagMap(nonSliceComponents);
     const skipChildrenTags = new Set(componentTags.keys());
 
+    // Create separate refs set for this slice to track only its imports
+    const sliceAssetRefs = globalAssetImports ? new Set<AssetImport>() : undefined;
+
     // Parse slice HTML
     const parsed = parseHtmlForComponent(sliceInfo.html, {
       componentTags,
       skipChildrenTags,
       assetImportMode: options.assetImportMode,
-      assetImports: localAssetImports,
-      assetImportRefs,
+      assetImports: globalAssetImports,
+      assetImportRefs: sliceAssetRefs,
       pxToRem: options.pxToRem,
     });
 
-    const usedAssetImports = assetImportRefs ? Array.from(assetImportRefs) : [];
-    const assetImportLines = buildAssetImportLines(usedAssetImports);
+    // Only include imports actually used in this slice
+    const sliceUsedImports = sliceAssetRefs ? Array.from(sliceAssetRefs) : [];
+    const assetImportLines = buildAssetImportLines(sliceUsedImports);
 
     // Build slice component - slices share the layout's CSS
     const code = buildReactComponentWithProps({
@@ -278,7 +282,7 @@ export async function figmaToReact(
       baseWidth: content.baseWidth,
       baseHeight: content.baseHeight,
       renderUnion: ir.renderUnion,
-      assetImports: usedAssetImports,
+      assetImports: sliceUsedImports,
     });
   }
 
@@ -291,17 +295,21 @@ export async function figmaToReact(
     layoutComponentTags.set(name.toLowerCase(), name);
   });
 
+  // Create separate refs set for layout to track only its imports
+  const layoutAssetRefs = globalAssetImports ? new Set<AssetImport>() : undefined;
+
   const layoutParsed = parseHtmlForComponent(splitResult.layoutHtml, {
     componentTags: layoutComponentTags,
     skipChildrenTags: new Set(sliceNames.map((n) => n.toLowerCase())),
     assetImportMode: options.assetImportMode,
-    assetImports: localAssetImports,
-    assetImportRefs,
+    assetImports: globalAssetImports,
+    assetImportRefs: layoutAssetRefs,
     pxToRem: options.pxToRem,
   });
 
-  const layoutAssetImports = assetImportRefs ? Array.from(assetImportRefs) : [];
-  const layoutAssetImportLines = buildAssetImportLines(layoutAssetImports);
+  // Only include imports actually used in layout (not slice imports)
+  const layoutUsedImports = layoutAssetRefs ? Array.from(layoutAssetRefs) : [];
+  const layoutAssetImportLines = buildAssetImportLines(layoutUsedImports);
 
   const layoutCode = buildReactComponentWithProps({
     componentName: 'Layout',
@@ -320,7 +328,7 @@ export async function figmaToReact(
     baseWidth: content.baseWidth,
     baseHeight: content.baseHeight,
     renderUnion: ir.renderUnion,
-    assetImports: layoutAssetImports,
+    assetImports: layoutUsedImports,
   };
 
   // Collect all assets

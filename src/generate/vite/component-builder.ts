@@ -153,8 +153,10 @@ export function generateBarrelExport(
   sliceNames: string[]
 ): void {
   const exports = [
+    `import Layout from './${layoutName}';`,
     `export { default as ${layoutName} } from './${layoutName}';`,
-    ...sliceNames.map(name => `export { default as ${name} } from './${name}';`)
+    ...sliceNames.map(name => `export { default as ${name} } from './${name}';`),
+    `export default Layout;`,
   ];
   fs.writeFileSync(path.join(outputDir, 'index.ts'), exports.join('\n') + '\n', 'utf8');
 }

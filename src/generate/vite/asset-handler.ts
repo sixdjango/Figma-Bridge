@@ -26,9 +26,24 @@ export interface CopyAssetsOptions {
 }
 
 /**
- * Copy assets from temp directories to output assets directory
+ * Result of copying assets
  */
-export function copyAssets(options: CopyAssetsOptions): { images: number; svgs: number } {
+export interface CopyAssetsResult {
+  /** Number of images copied */
+  imageCount: number;
+  /** Number of SVGs copied */
+  svgCount: number;
+  /** List of successfully copied image IDs */
+  copiedImages: string[];
+  /** List of successfully copied SVG filenames */
+  copiedSvgs: string[];
+}
+
+/**
+ * Copy assets from temp directories to output assets directory
+ * Returns info about successfully copied files (filters out non-existent files)
+ */
+export function copyAssets(options: CopyAssetsOptions): CopyAssetsResult {
   const { result, assetsDir, tempImagesDir, tempSvgsDir } = options;
 
   ensureDir(assetsDir);
@@ -36,30 +51,52 @@ export function copyAssets(options: CopyAssetsOptions): { images: number; svgs: 
   const images = Array.isArray(result?.assets?.images) ? result.assets.images : [];
   const svgs = Array.isArray(result?.assets?.svgs) ? result.assets.svgs : [];
 
-  let imageCount = 0;
-  let svgCount = 0;
+  const copiedImages: string[] = [];
+  const copiedSvgs: string[] = [];
 
   for (const id of images) {
     if (typeof id !== 'string' || !id) continue;
     const src = path.join(tempImagesDir, `${id}.png`);
     const dest = path.join(assetsDir, `${id}.png`);
-    if (copyFileIfNeeded(src, dest)) imageCount++;
+    if (copyFileIfNeeded(src, dest)) {
+      copiedImages.push(id);
+    }
   }
 
   for (const name of svgs) {
     if (typeof name !== 'string' || !name) continue;
     const src = path.join(tempSvgsDir, name);
     const dest = path.join(assetsDir, name);
-    if (copyFileIfNeeded(src, dest)) svgCount++;
+    if (copyFileIfNeeded(src, dest)) {
+      copiedSvgs.push(name);
+    }
   }
 
-  return { images: imageCount, svgs: svgCount };
+  return {
+    imageCount: copiedImages.length,
+    svgCount: copiedSvgs.length,
+    copiedImages,
+    copiedSvgs,
+  };
+}
+
+/**
+ * Options for building asset index entries
+ */
+export interface BuildAssetIndexOptions {
+  result: FigmaToReactResult;
+  /** Only include these images (filters out non-existent files) */
+  existingImages?: string[];
+  /** Only include these SVGs (filters out non-existent files) */
+  existingSvgs?: string[];
 }
 
 /**
  * Build asset index entries for barrel export
+ * Only includes assets that actually exist (if existingImages/existingSvgs are provided)
  */
-export function buildAssetIndexEntries(result: FigmaToReactResult): AssetIndexEntry[] {
+export function buildAssetIndexEntries(options: BuildAssetIndexOptions): AssetIndexEntry[] {
+  const { result, existingImages, existingSvgs } = options;
   const entries: AssetIndexEntry[] = [];
   const usedNames = new Set<string>();
   const existingByFile = new Map<string, AssetIndexEntry>();
@@ -68,9 +105,23 @@ export function buildAssetIndexEntries(result: FigmaToReactResult): AssetIndexEn
     (entry) => entry.kind === 'svg' && entry.importPath.includes('?react')
   );
 
-  // Process existing asset imports
+  // Build sets for quick lookup of existing files
+  const existingImageSet = existingImages ? new Set(existingImages) : null;
+  const existingSvgSet = existingSvgs ? new Set(existingSvgs) : null;
+
+  // Process existing asset imports (filter by existing files if provided)
   for (const entry of assetImports) {
     const fileName = stripQuery(entry.importPath).split(/[\\/]/).pop() || '';
+
+    // Skip if file doesn't exist (when we have the existing files list)
+    if (entry.kind === 'image' && existingImageSet) {
+      const imageId = getBaseName(fileName);
+      if (!existingImageSet.has(imageId)) continue;
+    }
+    if (entry.kind === 'svg' && existingSvgSet) {
+      if (!existingSvgSet.has(fileName)) continue;
+    }
+
     const record: AssetIndexEntry = {
       localName: entry.localName,
       importPath: toAssetIndexPath(entry.importPath),
@@ -82,8 +133,8 @@ export function buildAssetIndexEntries(result: FigmaToReactResult): AssetIndexEn
     usedNames.add(entry.localName);
   }
 
-  // Add missing images
-  const images = Array.isArray(result.assets?.images) ? result.assets.images : [];
+  // Add missing images (only those that exist)
+  const images = existingImages ?? (Array.isArray(result.assets?.images) ? result.assets.images : []);
   for (const id of images) {
     if (typeof id !== 'string' || !id) continue;
     const fileName = `${id}.png`;
@@ -93,8 +144,8 @@ export function buildAssetIndexEntries(result: FigmaToReactResult): AssetIndexEn
     existingByFile.set(fileName, entries[entries.length - 1]);
   }
 
-  // Add missing SVGs
-  const svgs = Array.isArray(result.assets?.svgs) ? result.assets.svgs : [];
+  // Add missing SVGs (only those that exist)
+  const svgs = existingSvgs ?? (Array.isArray(result.assets?.svgs) ? result.assets.svgs : []);
   for (const name of svgs) {
     if (typeof name !== 'string' || !name) continue;
     if (existingByFile.has(name)) continue;

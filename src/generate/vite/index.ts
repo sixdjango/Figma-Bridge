@@ -107,16 +107,20 @@ export async function generateViteComponents(
     pxToRem: opts.pxToRem,
   });
 
-  // Copy assets
-  copyAssets({
+  // Copy assets (returns only successfully copied files)
+  const copyResult = copyAssets({
     result,
     assetsDir,
     tempImagesDir,
     tempSvgsDir,
   });
 
-  // Write assets index
-  const assetEntries = buildAssetIndexEntries(result);
+  // Write assets index (only for files that actually exist)
+  const assetEntries = buildAssetIndexEntries({
+    result,
+    existingImages: copyResult.copiedImages,
+    existingSvgs: copyResult.copiedSvgs,
+  });
   writeAssetsIndex(assetsDir, assetEntries);
 
   // Write slice components
@@ -157,15 +161,10 @@ export async function generateViteComponents(
   generateBarrelExport(outputDir, result.layout.name, sliceNames);
   logger.info('Written: index.ts');
 
-  // Count SVG files
-  const svgFiles = fs.existsSync(assetsDir)
-    ? fs.readdirSync(assetsDir).filter((f) => f.endsWith('.svg'))
-    : [];
-
   logger.info('Generation complete!');
   logger.info(`  Layout: ${result.layout.name}`);
   logger.info(`  Slices: ${result.slices.length}`);
-  logger.info(`  Assets: ${svgFiles.length} SVGs`);
+  logger.info(`  Assets: ${copyResult.copiedSvgs.length} SVGs, ${copyResult.copiedImages.length} images`);
 
   return {
     layout: {
@@ -176,8 +175,8 @@ export async function generateViteComponents(
     },
     slices: sliceResults,
     assets: {
-      svgs: svgFiles,
-      images: Array.isArray(result.assets?.images) ? result.assets.images : [],
+      svgs: copyResult.copiedSvgs,
+      images: copyResult.copiedImages,
     },
   };
 }

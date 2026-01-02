@@ -103,13 +103,17 @@ function mergeAttrs(base: Record<string, string>, extra?: Record<string, string>
   if (extra) {
     for (const [k, v] of Object.entries(extra)) {
       if (v === undefined || v === null) continue;
-      merged[k] = String(v);
+      // Convert className to class for HTML output
+      const key = k === 'className' ? 'class' : k;
+      merged[key] = String(v);
     }
   }
 
+  // Merge class/className: base classes come after extra classes
   if (base.class) {
     merged.class = merged.class ? `${merged.class} ${base.class}` : base.class;
   }
+  // Merge style: base styles come after extra styles (extra styles can be overridden)
   if (base.style) {
     merged.style = merged.style ? `${merged.style};${base.style}` : base.style;
   }
@@ -131,6 +135,32 @@ function stringifyAttrValue(v: any): string | undefined {
   }
 }
 
+/**
+ * Convert camelCase to kebab-case for CSS property names
+ */
+function camelToKebab(str: string): string {
+  return str.replace(/([A-Z])/g, '-$1').toLowerCase();
+}
+
+/**
+ * Convert a style object to CSS string
+ * e.g., { fontSize: 24, color: '#000' } -> 'font-size: 24px; color: #000'
+ */
+function styleObjectToCssString(style: Record<string, any>): string {
+  const parts: string[] = [];
+  for (const [key, value] of Object.entries(style)) {
+    if (value === undefined || value === null) continue;
+    const cssKey = camelToKebab(key);
+    let cssValue = String(value);
+    // Add 'px' unit for numeric values on certain properties
+    if (typeof value === 'number' && !cssKey.includes('opacity') && !cssKey.includes('z-index') && !cssKey.includes('flex') && !cssKey.includes('order') && !cssKey.includes('line-height')) {
+      cssValue = `${value}px`;
+    }
+    parts.push(`${cssKey}: ${cssValue}`);
+  }
+  return parts.join('; ');
+}
+
 function buildCustomComponentAttrs(def?: CustomComponentDef): { tagName?: string; attrs?: Record<string, string> } {
   if (!def || typeof def.type !== 'string' || !def.type.trim()) return {};
   const attrs: Record<string, string> = {};
@@ -140,6 +170,12 @@ function buildCustomComponentAttrs(def?: CustomComponentDef): { tagName?: string
   if (def.props && typeof def.props === 'object') {
     for (const [k, v] of Object.entries(def.props)) {
       if (!k) continue;
+      // Special handling for style prop - convert object to CSS string
+      if (k === 'style' && v && typeof v === 'object' && !Array.isArray(v)) {
+        attrs[k] = styleObjectToCssString(v as Record<string, any>);
+        continue;
+      }
+      // Special handling for className - keep as className for React compatibility
       const val = stringifyAttrValue(v);
       if (val !== undefined) attrs[k] = val;
     }
