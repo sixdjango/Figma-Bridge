@@ -1,4 +1,4 @@
-import type { RenderNodeIR, LayoutInfo } from './types';
+import type { RenderNodeIR, LayoutInfo, CustomComponentDef } from './types';
 import { CssCollector } from '../utils/cssCollector';
 import { collectNodeBoxCss } from '../utils/nodeStyle';
 import { collectTextCss, parseEffects, type ShadowEffect } from '../utils/css';
@@ -12,7 +12,10 @@ import { buildContent } from './content-builder';
 import { computeEffectsMode, shouldInheritShadows } from '../utils/effects-mode';
 import type { FigmaNode, CompositionInput } from '../types/figma';
 
-export function compositionToIR(composition: CompositionInput | { absOrigin?: { x: number; y: number }; children?: FigmaNode[] }): { nodes: RenderNodeIR[]; cssRules: string; rawComposition: any; renderUnion: { x: number; y: number; width: number; height: number }; fontMeta: { fonts: { family: string; weights: number[]; styles: string[] }[] }; assetMeta: { images: string[]; svgs?: string[] } } {
+export function compositionToIR(
+  composition: CompositionInput | { absOrigin?: { x: number; y: number }; children?: FigmaNode[] },
+  options?: { customComponents?: CustomComponentDef[] }
+): { nodes: RenderNodeIR[]; cssRules: string; rawComposition: any; renderUnion: { x: number; y: number; width: number; height: number }; fontMeta: { fonts: { family: string; weights: number[]; styles: string[] }[] }; assetMeta: { images: string[]; svgs?: string[] } } {
   if (!composition || typeof composition !== 'object') throw new Error('Invalid composition');
   const children = Array.isArray(composition.children) ? composition.children : [];
   if (!children.length) return { nodes: [], cssRules: '', rawComposition: composition, renderUnion: { x: 0, y: 0, width: 0, height: 0 }, fontMeta: { fonts: [] }, assetMeta: { images: [] } };
@@ -31,6 +34,17 @@ export function compositionToIR(composition: CompositionInput | { absOrigin?: { 
 
   const cssCollector = new CssCollector();
 
+  const componentMap = new Map<string, CustomComponentDef>();
+  if (options?.customComponents && Array.isArray(options.customComponents)) {
+    for (const def of options.customComponents) {
+      if (!def || typeof def !== 'object') continue;
+      const nodeId = 'nodeId' in def ? (def as any).nodeId : undefined;
+      const type = 'type' in def ? (def as any).type : undefined;
+      if (typeof nodeId !== 'string' || typeof type !== 'string' || !nodeId || !type) continue;
+      componentMap.set(String(nodeId), { ...def, nodeId: String(nodeId), type: String(type) });
+    }
+  }
+
   function fnv1a(str: string): string {
     let h = 2166136261 >>> 0;
     for (let i = 0; i < str.length; i++) {
@@ -42,7 +56,7 @@ export function compositionToIR(composition: CompositionInput | { absOrigin?: { 
 
   const nodes: RenderNodeIR[] = children
     .filter((n: FigmaNode) => n && n.visible !== false)
-    .map((child: FigmaNode) => nodeToIR(child, M_comp, cssCollector));
+    .map((child: FigmaNode) => nodeToIR(child, M_comp, cssCollector, undefined, undefined, componentMap));
 
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   children.forEach((ch: FigmaNode, index: number) => {
@@ -172,7 +186,8 @@ export function nodeToIR(
   parentAbs: number[][],
   cssCollector: CssCollector,
   inheritedShadows?: ShadowEffect[] | null,
-  flags?: { asFlexItem?: boolean; parentAxes?: ReturnType<typeof getLayoutAxes>; parentAlignItemsCss?: string | undefined; parentWrap?: string }
+  flags?: { asFlexItem?: boolean; parentAxes?: ReturnType<typeof getLayoutAxes>; parentAlignItemsCss?: string | undefined; parentWrap?: string },
+  componentMap?: Map<string, CustomComponentDef>
 ): RenderNodeIR {
   if (!node) throw new Error('nodeToIR called with null/undefined node');
   if (node.visible === false) throw new Error(`Invisible node ${node.id} should have been filtered upstream`);
@@ -180,7 +195,7 @@ export function nodeToIR(
   const { kind, layout } = computeLayout(node, parentAbs, flags);
   const mode = computeEffectsMode(node);
   const style = collectStyle(node, kind, cssCollector, inheritedShadows, mode);
-  const content = buildContent(node, kind, parentAbs, cssCollector, inheritedShadows, mode, flags);
+  const content = buildContent(node, kind, parentAbs, cssCollector, inheritedShadows, mode, flags, componentMap);
   const rawStyle = buildRawStyle(node);
   const svgFileProp = svgIdToFile(node);
 
@@ -199,5 +214,6 @@ export function nodeToIR(
     svgContent: node.svgContent,
     svgFile: svgFileProp,
     text: node.text,
+    customComponent: componentMap?.get(String(node.id || '')),
   };
 }

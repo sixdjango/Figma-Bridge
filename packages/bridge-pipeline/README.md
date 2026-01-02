@@ -35,6 +35,7 @@ The repository includes:
 ```typescript
 import {
   figmaToHtml,           // Main: Figma data → HTML
+  figmaToReact,         // Generate React component files (layout + slices)
   compositionToIR,       // Convert to intermediate representation
   normalizeComposition,  // Prepare raw Figma data
   normalizeHtml,         // Clean up generated HTML

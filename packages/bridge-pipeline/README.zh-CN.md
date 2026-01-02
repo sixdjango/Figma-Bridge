@@ -35,6 +35,7 @@ npm install figma-html-bridge
 ```typescript
 import {
   figmaToHtml,           // 主函数：Figma 数据 → HTML
+  figmaToReact,         // 输出 React 组件（Layout + Slice）
   compositionToIR,       // 转换为中间表示
   normalizeComposition,  // 准备原始 Figma 数据
   normalizeHtml,         // 清理生成的 HTML
