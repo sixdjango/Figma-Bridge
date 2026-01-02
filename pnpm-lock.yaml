@@ -1976,7 +1976,11 @@ snapshots:
     dependencies:
       reusify: 1.1.0
 
-  figma-html-bridge@file:packages/bridge-pipeline: {}
+  figma-html-bridge@file:packages/bridge-pipeline:
+    dependencies:
+      linkedom: 0.18.12
+    transitivePeerDependencies:
+      - canvas
 
   file-entry-cache@6.0.1:
     dependencies:

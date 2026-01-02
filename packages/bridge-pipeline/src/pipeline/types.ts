@@ -60,7 +60,7 @@ export type Content = TextContent | SvgContent | ChildrenContent | EmptyContent;
 export type CustomComponentImportWay = 'DEFAULT' | 'NAMED' | string;
 export type CustomComponentType = 'NORMAL' | 'SLICE' | string;
 export type CustomComponentDef = {
-  nodeID: string;
+  nodeId: string;
   type: string;
   componentType?: CustomComponentType;
   props?: Record<string, any>;

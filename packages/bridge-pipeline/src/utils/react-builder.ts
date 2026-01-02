@@ -1,13 +1,80 @@
 import { parseHTML } from 'linkedom';
 
+export type AssetImportMode = {
+  svg?: 'svgr' | 'svgr-query' | 'url' | 'none';
+  image?: 'url' | 'none';
+};
+
+export type AssetImport = {
+  kind: 'image' | 'svg';
+  localName: string;
+  importPath: string;
+  useComponent?: boolean;
+};
+
+/**
+ * Options for converting px to rem in styles
+ */
+export type PxToRemOptions = {
+  /** Enable px to rem conversion */
+  enabled: boolean;
+  /** Base font size in px (default: 16) */
+  baseFontSize?: number;
+  /** Decimal precision (default: 4) */
+  precision?: number;
+  /** Properties to exclude from conversion (e.g., ['border-width', 'box-shadow']) */
+  excludeProperties?: string[];
+};
+
+export type JsxParseResult = {
+  rootTag: string;
+  rootClassName: string;
+  rootStyleObj: Record<string, string>;
+  rootOtherAttrs: Record<string, string>;
+  innerJsx: string;
+  fullJsx: string;
+};
+
 type ReactifyOptions = {
   indent?: number;
   componentTags?: Map<string, string>;
+  skipChildrenTags?: Set<string>;
+  assetImportMode?: AssetImportMode;
+  assetImports?: Map<string, AssetImport>;
+  assetImportRefs?: Set<AssetImport>;
+  pxToRem?: PxToRemOptions;
 };
 
 const VOID_ELEMENTS = new Set([
   'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr'
 ]);
+
+function stripQueryAndHash(src: string): string {
+  return src.split(/[?#]/)[0];
+}
+
+function getAssetExtension(src: string): string | null {
+  const clean = stripQueryAndHash(src);
+  const idx = clean.lastIndexOf('.');
+  if (idx <= 0 || idx >= clean.length - 1) return null;
+  return clean.slice(idx + 1).toLowerCase();
+}
+
+function getAssetBaseName(src: string): string {
+  const clean = stripQueryAndHash(src);
+  const parts = clean.split(/[\\/]/);
+  const file = parts[parts.length - 1] || '';
+  const idx = file.lastIndexOf('.');
+  return idx > 0 ? file.slice(0, idx) : file;
+}
+
+function toPascalCase(input: string): string {
+  const parts = String(input || '')
+    .split(/[^a-zA-Z0-9]+/)
+    .filter(Boolean);
+  if (!parts.length) return '';
+  return parts.map((p) => p[0].toUpperCase() + p.slice(1)).join('');
+}
 
 function toCamelCase(prop: string): string {
   if (!prop) return '';
@@ -15,23 +82,68 @@ function toCamelCase(prop: string): string {
   return prop.replace(/-([a-z0-9])/gi, (_m, c: string) => c.toUpperCase());
 }
 
-function styleToObjectLiteral(style: string): string {
+/**
+ * Convert px value to rem
+ */
+function convertPxToRem(value: string, options: PxToRemOptions): string {
+  const baseFontSize = options.baseFontSize ?? 16;
+  const precision = options.precision ?? 4;
+
+  // Match px values including negative numbers and decimals
+  return value.replace(/(-?\d*\.?\d+)px\b/g, (_match, num) => {
+    const pxValue = parseFloat(num);
+    if (pxValue === 0) return '0';
+    const remValue = pxValue / baseFontSize;
+    // Round to specified precision and remove trailing zeros
+    const rounded = parseFloat(remValue.toFixed(precision));
+    return `${rounded}rem`;
+  });
+}
+
+/**
+ * Check if a property should be excluded from px→rem conversion
+ */
+function shouldExcludeProperty(prop: string, excludeList?: string[]): boolean {
+  if (!excludeList || excludeList.length === 0) return false;
+  const lowerProp = prop.toLowerCase();
+  const camelProp = toCamelCase(prop);
+  return excludeList.some(ex => {
+    const lowerEx = ex.toLowerCase();
+    return lowerProp === lowerEx || camelProp === toCamelCase(ex);
+  });
+}
+
+function parseStyleToObject(style: string, pxToRemOptions?: PxToRemOptions): Record<string, string> {
+  const result: Record<string, string> = {};
   const entries = (style || '')
     .split(';')
     .map((part) => part.trim())
     .filter(Boolean);
-  const kvs = entries
-    .map((entry) => {
-      const idx = entry.indexOf(':');
-      if (idx <= 0) return '';
-      const rawKey = entry.slice(0, idx).trim();
-      const rawVal = entry.slice(idx + 1).trim();
-      if (!rawKey) return '';
-      const key = toCamelCase(rawKey);
-      return `'${key}': ${JSON.stringify(rawVal)}`;
-    })
-    .filter(Boolean);
+  for (const entry of entries) {
+    const idx = entry.indexOf(':');
+    if (idx <= 0) continue;
+    const rawKey = entry.slice(0, idx).trim();
+    let rawVal = entry.slice(idx + 1).trim();
+    if (!rawKey) continue;
+
+    // Apply px→rem conversion if enabled
+    if (pxToRemOptions?.enabled && !shouldExcludeProperty(rawKey, pxToRemOptions.excludeProperties)) {
+      rawVal = convertPxToRem(rawVal, pxToRemOptions);
+    }
+
+    const key = toCamelCase(rawKey);
+    result[key] = rawVal;
+  }
+  return result;
+}
+
+function styleObjectToLiteral(obj: Record<string, string>): string {
+  const kvs = Object.entries(obj).map(([k, v]) => `'${k}': ${JSON.stringify(v)}`);
   return `{ ${kvs.join(', ')} }`;
+}
+
+function styleToObjectLiteral(style: string, pxToRemOptions?: PxToRemOptions): string {
+  return styleObjectToLiteral(parseStyleToObject(style, pxToRemOptions));
 }
 
 function indentLines(str: string, level: number): string {
@@ -47,6 +159,67 @@ function escText(text: string): string {
   return `{${JSON.stringify(text)}}`;
 }
 
+function buildImportName(base: string, prefix: string): string {
+  const pascal = toPascalCase(base) || 'Asset';
+  const name = `${prefix}${pascal}`;
+  return /^[A-Za-z_]/.test(name) ? name : `Asset${name}`;
+}
+
+function ensureUniqueName(name: string, used: Set<string>): string {
+  if (!used.has(name)) {
+    used.add(name);
+    return name;
+  }
+  let i = 2;
+  while (used.has(`${name}${i}`)) i += 1;
+  const finalName = `${name}${i}`;
+  used.add(finalName);
+  return finalName;
+}
+
+function withReactQuery(src: string): string {
+  if (/[?&]react(\b|=|&|$)/.test(src)) return src;
+  return src.includes('?') ? `${src}&react` : `${src}?react`;
+}
+
+function shouldSkipAssetImport(src: string): boolean {
+  if (!src) return true;
+  const lower = src.toLowerCase();
+  if (lower.startsWith('data:')) return true;
+  if (lower.startsWith('http:') || lower.startsWith('https:')) return true;
+  if (src.startsWith('//')) return true;
+  if (src.startsWith('#')) return true;
+  if (src.startsWith('/')) return true;
+  return false;
+}
+
+function resolveAssetImport(src: string, options: ReactifyOptions): AssetImport | null {
+  const assetImports = options.assetImports;
+  const mode = options.assetImportMode;
+  if (!assetImports || !mode) return null;
+  if (shouldSkipAssetImport(src)) return null;
+  const ext = getAssetExtension(src);
+  if (!ext) return null;
+  const kind: 'image' | 'svg' = ext === 'svg' ? 'svg' : 'image';
+  const kindMode = kind === 'svg' ? (mode.svg ?? 'none') : (mode.image ?? 'none');
+  if (kindMode === 'none') return null;
+
+  const existing = assetImports.get(src);
+  if (existing) return existing;
+
+  const baseName = getAssetBaseName(src);
+  const prefix = kind === 'svg' ? 'Svg' : 'Img';
+  const usedNames = new Set(Array.from(assetImports.values()).map((v) => v.localName));
+  const localName = ensureUniqueName(buildImportName(baseName, prefix), usedNames);
+  const useComponent = kind === 'svg' && (kindMode === 'svgr' || kindMode === 'svgr-query');
+  const importPath = useComponent && kindMode === 'svgr-query' ? withReactQuery(src) : src;
+
+  const entry: AssetImport = { kind, localName, importPath, useComponent };
+  assetImports.set(src, entry);
+  if (options.assetImportRefs) options.assetImportRefs.add(entry);
+  return entry;
+}
+
 function nodeToJsx(node: any, depth: number, options: ReactifyOptions): string {
   const indent = ' '.repeat(depth);
   if (node.nodeType === 3) {
@@ -57,30 +230,46 @@ function nodeToJsx(node: any, depth: number, options: ReactifyOptions): string {
   if (node.nodeType !== 1) return '';
 
   const rawTag = (node.localName || node.tagName || '').toString();
-  const tagLookup = options.componentTags?.get(rawTag.toLowerCase());
-  const tagName = tagLookup || rawTag;
+  const tagKey = rawTag.toLowerCase();
+  const tagLookup = options.componentTags?.get(tagKey);
+  let tagName = tagLookup || rawTag;
+  const skipChildren = options.skipChildrenTags?.has(tagKey) || false;
+  const isImgTag = tagKey === 'img';
+  const srcAttr = isImgTag ? (node.getAttribute('src') ?? '') : '';
+  const assetImport = isImgTag ? resolveAssetImport(srcAttr, options) : null;
+  if (assetImport && options.assetImportRefs) options.assetImportRefs.add(assetImport);
+  const isSvgComponent = !!(assetImport && assetImport.useComponent && assetImport.kind === 'svg');
+  if (isSvgComponent) {
+    tagName = assetImport!.localName;
+  }
 
   const attrParts: string[] = [];
   for (const attr of node.getAttributeNames()) {
+    const attrLower = attr.toLowerCase();
+    if (isSvgComponent && (attrLower === 'src' || attrLower === 'alt')) continue;
     let name = attr;
-    if (name === 'class') name = 'className';
-    else if (name === 'for') name = 'htmlFor';
-    else if (name.toLowerCase() === 'onclick') name = 'onClick';
+    if (attrLower === 'class') name = 'className';
+    else if (attrLower === 'for') name = 'htmlFor';
+    else if (attrLower === 'onclick') name = 'onClick';
     const val = node.getAttribute(attr) ?? '';
-    if (name === 'style') {
-      attrParts.push(`style={${styleToObjectLiteral(val)}}`);
+    if (assetImport && !assetImport.useComponent && attrLower === 'src') {
+      attrParts.push(`src={${assetImport.localName}}`);
+    } else if (attrLower === 'style') {
+      attrParts.push(`style={${styleToObjectLiteral(val, options.pxToRem)}}`);
     } else {
       attrParts.push(`${name}=${JSON.stringify(val)}`);
     }
   }
   const attrStr = attrParts.length ? ' ' + attrParts.join(' ') : '';
-  const children = Array.from(node.childNodes || [])
-    .map((ch: any) => nodeToJsx(ch, depth + (options.indent || 2), options))
-    .filter(Boolean);
+  const children = skipChildren
+    ? []
+    : Array.from(node.childNodes || [])
+        .map((ch: any) => nodeToJsx(ch, depth + (options.indent || 2), options))
+        .filter(Boolean);
   const childStr = children.join('\n');
 
   if (!childStr) {
-    const voidish = VOID_ELEMENTS.has(tagName.toLowerCase());
+    const voidish = VOID_ELEMENTS.has(tagName.toLowerCase()) || isSvgComponent;
     const self = `${indent}<${tagName}${attrStr}${voidish ? ' />' : '></' + tagName + '>'}`;
     return self;
   }
@@ -90,9 +279,23 @@ function nodeToJsx(node: any, depth: number, options: ReactifyOptions): string {
   return `${open}\n${childStr}\n${close}`;
 }
 
-export function htmlFragmentToJsx(html: string, options: ReactifyOptions = {}): string {
+function getRoots(html: string): any[] {
   const parsed = parseHTML(html || '');
-  const roots = Array.from((parsed?.document?.body?.childNodes || []) as any[]);
+  const isFullDoc = /<!doctype\s+html/i.test(html) || /<html[\s>]/i.test(html);
+  if (isFullDoc) {
+    return Array.from((parsed?.document?.body?.childNodes || []) as any[]);
+  }
+  const docEl = parsed?.document?.documentElement;
+  if (docEl && docEl.tagName !== 'HTML') {
+    return [docEl];
+  } else if (docEl) {
+    return Array.from((parsed?.document?.body?.childNodes || []) as any[]);
+  }
+  return [];
+}
+
+export function htmlFragmentToJsx(html: string, options: ReactifyOptions = {}): string {
+  const roots = getRoots(html);
   const children = roots
     .map((n) => nodeToJsx(n, options.indent ?? 2, options))
     .filter(Boolean);
@@ -100,6 +303,57 @@ export function htmlFragmentToJsx(html: string, options: ReactifyOptions = {}): 
   const inner = children.join('\n');
   const fragIndent = ' '.repeat(options.indent ?? 2);
   return `${fragIndent}<>\n${inner}\n${fragIndent}</>`;
+}
+
+export function parseHtmlForComponent(html: string, options: ReactifyOptions = {}): JsxParseResult {
+  const roots = getRoots(html);
+  const elementRoots = roots.filter((n) => n.nodeType === 1);
+
+  if (elementRoots.length !== 1) {
+    // Multiple or no root elements - wrap in fragment
+    const fullJsx = htmlFragmentToJsx(html, options);
+    return {
+      rootTag: '',
+      rootClassName: '',
+      rootStyleObj: {},
+      rootOtherAttrs: {},
+      innerJsx: fullJsx,
+      fullJsx,
+    };
+  }
+
+  const root = elementRoots[0];
+  const rootTag = (root.localName || root.tagName || 'div').toString().toLowerCase();
+  const rootClassName = root.getAttribute('class') || '';
+  const rootStyleStr = root.getAttribute('style') || '';
+  const rootStyleObj = parseStyleToObject(rootStyleStr, options.pxToRem);
+
+  // Collect other attributes
+  const rootOtherAttrs: Record<string, string> = {};
+  for (const attr of root.getAttributeNames()) {
+    const attrLower = attr.toLowerCase();
+    if (attrLower === 'class' || attrLower === 'style') continue;
+    rootOtherAttrs[attr] = root.getAttribute(attr) || '';
+  }
+
+  // Generate inner JSX (children only)
+  const childNodes = Array.from(root.childNodes || []);
+  const innerParts = childNodes
+    .map((ch: any) => nodeToJsx(ch, options.indent ?? 2, options))
+    .filter(Boolean);
+  const innerJsx = innerParts.join('\n');
+
+  // Generate full JSX for reference
+  const fullJsx = nodeToJsx(root, options.indent ?? 2, options);
+
+  return {
+    rootTag,
+    rootClassName,
+    rootStyleObj,
+    rootOtherAttrs,
+    innerJsx,
+    fullJsx,
+  };
 }
 
 export function buildReactComponentSource(
@@ -125,6 +379,77 @@ export function buildReactComponentSource(
     '  </>',
     ');',
   ];
+  if (exportDefault) {
+    lines.push('', `export default ${componentName};`);
+  }
+  return lines.join('\n');
+}
+
+export type ComponentBuildOptions = {
+  componentName: string;
+  parsed: JsxParseResult;
+  cssText: string;
+  imports?: string[];
+  exportDefault?: boolean;
+  pxToRem?: PxToRemOptions;
+};
+
+export function buildReactComponentWithProps(options: ComponentBuildOptions): string {
+  const { componentName, parsed, cssText, imports = [], exportDefault = true } = options;
+  const importSet = new Set<string>();
+  importSet.add("import React from 'react';");
+  imports.filter(Boolean).forEach((imp) => importSet.add(imp));
+  const importSection = Array.from(importSet).join('\n');
+  const cssLiteral = JSON.stringify(cssText || '');
+
+  // If no single root element, fall back to simple component
+  if (!parsed.rootTag) {
+    const indentedJsx = indentLines(parsed.innerJsx, 4);
+    const lines = [
+      importSection,
+      '',
+      `export const ${componentName} = () => (`,
+      '  <>',
+      `    <style dangerouslySetInnerHTML={{ __html: ${cssLiteral} }} />`,
+      indentedJsx,
+      '  </>',
+      ');',
+    ];
+    if (exportDefault) {
+      lines.push('', `export default ${componentName};`);
+    }
+    return lines.join('\n');
+  }
+
+  // Build base style object literal
+  const baseStyleLiteral = styleObjectToLiteral(parsed.rootStyleObj);
+
+  // Build other attrs string
+  const otherAttrParts: string[] = [];
+  for (const [k, v] of Object.entries(parsed.rootOtherAttrs)) {
+    otherAttrParts.push(`${k}=${JSON.stringify(v)}`);
+  }
+  const otherAttrsStr = otherAttrParts.length ? ' ' + otherAttrParts.join(' ') : '';
+
+  // Indent inner JSX
+  const indentedInner = parsed.innerJsx ? '\n' + indentLines(parsed.innerJsx, 6) + '\n    ' : '';
+
+  const lines = [
+    importSection,
+    '',
+    `const baseClassName = ${JSON.stringify(parsed.rootClassName)};`,
+    `const baseStyle = ${baseStyleLiteral};`,
+    '',
+    `export const ${componentName} = ({ className, style, ...props }) => (`,
+    `  <${parsed.rootTag}`,
+    `    className={className ? \`\${baseClassName} \${className}\` : baseClassName}`,
+    `    style={{ ...baseStyle, ...style }}`,
+    `    {...props}${otherAttrsStr}`,
+    '  >',
+    `    <style dangerouslySetInnerHTML={{ __html: ${cssLiteral} }} />${indentedInner}</${parsed.rootTag}>`,
+    ');',
+  ];
+
   if (exportDefault) {
     lines.push('', `export default ${componentName};`);
   }

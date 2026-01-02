@@ -38,10 +38,10 @@ export function compositionToIR(
   if (options?.customComponents && Array.isArray(options.customComponents)) {
     for (const def of options.customComponents) {
       if (!def || typeof def !== 'object') continue;
-      const nodeID = 'nodeID' in def ? (def as any).nodeID : undefined;
+      const nodeId = 'nodeId' in def ? (def as any).nodeId : undefined;
       const type = 'type' in def ? (def as any).type : undefined;
-      if (typeof nodeID !== 'string' || typeof type !== 'string' || !nodeID || !type) continue;
-      componentMap.set(String(nodeID), { ...def, nodeID: String(nodeID), type: String(type) });
+      if (typeof nodeId !== 'string' || typeof type !== 'string' || !nodeId || !type) continue;
+      componentMap.set(String(nodeId), { ...def, nodeId: String(nodeId), type: String(type) });
     }
   }
 

@@ -2,13 +2,21 @@ import { normalizeComposition } from '../utils/normalize';
 import { compositionToIR } from '../pipeline/ir';
 import { createContentAssets } from '../pipeline/html';
 import { applyAssetUrlProvider, type AssetUrlProvider } from '../utils/asset-mapper';
-import { buildReactComponentSource, htmlFragmentToJsx } from '../utils/react-builder';
+import { parseHtmlForComponent, buildReactComponentWithProps, htmlFragmentToJsx, type AssetImport, type AssetImportMode, type PxToRemOptions } from '../utils/react-builder';
 import type { CustomComponentDef, Rect } from '../pipeline/types';
 
 type SliceInput = { components?: CustomComponentDef[]; figmaJson?: any; name?: string };
 type SplitCompositionInput = { layout: SliceInput; slices?: SliceInput[] };
 
-export type FigmaToReactOptions = { assetUrlProvider?: AssetUrlProvider };
+export type FigmaToReactOptions = {
+  assetUrlProvider?: AssetUrlProvider;
+  assetImportMode?: AssetImportMode;
+  /**
+   * Optional px to rem conversion for inline styles
+   * When enabled, converts px values to rem in style attributes
+   */
+  pxToRem?: PxToRemOptions;
+};
 
 export type ReactComponentFile = {
   name: string;
@@ -19,12 +27,14 @@ export type ReactComponentFile = {
   baseWidth: number;
   baseHeight: number;
   renderUnion: Rect;
+  assetImports?: AssetImport[];
 };
 
 export type FigmaToReactResult = {
   layout: ReactComponentFile;
   slices: ReactComponentFile[];
   assets: { images: string[]; svgs: string[] };
+  assetImports?: AssetImport[];
 };
 
 function sanitizeComponentName(raw: string | undefined, fallback: string): string {
@@ -48,6 +58,23 @@ function buildComponentTagMap(components?: CustomComponentDef[]): Map<string, st
     }
   });
   return map;
+}
+
+function buildAssetImportLines(assetImports?: AssetImport[]): string[] {
+  if (!assetImports || assetImports.length === 0) return [];
+  const entries = [...assetImports];
+  entries.sort((a, b) => a.importPath.localeCompare(b.importPath));
+  const lines: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of entries) {
+    const line = entry.useComponent
+      ? `import { ReactComponent as ${entry.localName} } from '${entry.importPath}';`
+      : `import ${entry.localName} from '${entry.importPath}';`;
+    if (seen.has(line)) continue;
+    seen.add(line);
+    lines.push(line);
+  }
+  return lines;
 }
 
 function deriveSliceName(slice: SliceInput, index: number): string {
@@ -82,7 +109,8 @@ async function buildReactComponent(
   components: CustomComponentDef[] | undefined,
   componentName: string,
   options: FigmaToReactOptions,
-  additionalImports: string[] = []
+  additionalImports: string[] = [],
+  assetImportMap?: Map<string, AssetImport>
 ): Promise<ReactComponentFile & { assets: { images: string[]; svgs: string[] } }> {
   normalizeComposition(composition);
   const ir = compositionToIR(composition, { customComponents: components });
@@ -97,8 +125,33 @@ async function buildReactComponent(
 
   const mapped = applyAssetUrlProvider(content.bodyHtml, content.cssText, ir.nodes, options.assetUrlProvider);
   const componentTags = buildComponentTagMap(components);
-  const jsx = htmlFragmentToJsx(mapped.htmlFragment || mapped.html, { componentTags });
-  const code = buildReactComponentSource(componentName, jsx, mapped.cssText, additionalImports, true);
+  const skipChildrenTags = new Set(componentTags.keys());
+  const localAssetImports = assetImportMap ?? (options.assetImportMode ? new Map<string, AssetImport>() : undefined);
+  const assetImportRefs = localAssetImports ? new Set<AssetImport>() : undefined;
+
+  // Parse HTML and extract root element info for props merging
+  const parsed = parseHtmlForComponent(mapped.htmlFragment || mapped.html, {
+    componentTags,
+    skipChildrenTags,
+    assetImportMode: options.assetImportMode,
+    assetImports: localAssetImports,
+    assetImportRefs,
+    pxToRem: options.pxToRem,
+  });
+
+  const usedAssetImports = assetImportRefs ? Array.from(assetImportRefs) : [];
+  const assetImportLines = buildAssetImportLines(usedAssetImports);
+
+  // Build component with props support
+  const code = buildReactComponentWithProps({
+    componentName,
+    parsed,
+    cssText: mapped.cssText,
+    imports: [...additionalImports, ...assetImportLines],
+    exportDefault: true,
+  });
+
+  const jsx = parsed.fullJsx;
   const assets = { images: ir.assetMeta.images || [], svgs: ir.assetMeta.svgs || [] };
 
   return {
@@ -111,6 +164,7 @@ async function buildReactComponent(
     baseHeight: content.baseHeight,
     renderUnion: ir.renderUnion,
     assets,
+    assetImports: usedAssetImports,
   };
 }
 
@@ -119,6 +173,7 @@ export async function figmaToReact(
   options: FigmaToReactOptions = {}
 ): Promise<FigmaToReactResult> {
   const { layout, slices, isSplit } = resolveInput(input as any);
+  const sharedAssetImports = options.assetImportMode ? new Map<string, AssetImport>() : undefined;
   const sliceComponents = Array.isArray(slices)
     ? slices.reduce<CustomComponentDef[]>((acc, cur) => {
         if (Array.isArray(cur?.components)) acc.push(...cur.components!);
@@ -140,7 +195,9 @@ export async function figmaToReact(
         slice.figmaJson,
         slice.components,
         sliceName,
-        options
+        options,
+        [],
+        sharedAssetImports
       );
       sliceOutputs.push(sliceResult);
     }
@@ -152,7 +209,8 @@ export async function figmaToReact(
     layoutComponents,
     'Layout',
     options,
-    layoutImports
+    layoutImports,
+    sharedAssetImports
   );
 
   const imageSet = new Set<string>();
@@ -162,5 +220,11 @@ export async function figmaToReact(
     r.assets?.svgs?.forEach((svg: string) => svgSet.add(svg));
   });
 
-  return { layout: layoutResult, slices: sliceOutputs, assets: { images: Array.from(imageSet), svgs: Array.from(svgSet) } };
+  const allAssetImports = sharedAssetImports ? Array.from(sharedAssetImports.values()) : undefined;
+  return {
+    layout: layoutResult,
+    slices: sliceOutputs,
+    assets: { images: Array.from(imageSet), svgs: Array.from(svgSet) },
+    assetImports: allAssetImports,
+  };
 }

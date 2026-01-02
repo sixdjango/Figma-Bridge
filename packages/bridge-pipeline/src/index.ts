@@ -1,6 +1,7 @@
 export { figmaToHtml } from './public-api/figmaToHtml';
 export { figmaToReact } from './public-api/figmaToReact';
 export type { FigmaToReactOptions, ReactComponentFile, FigmaToReactResult } from './public-api/figmaToReact';
+export type { PxToRemOptions } from './utils/react-builder';
 // Expose IR builder for upstream needs (e.g., inspector/sidebar trees)
 export { compositionToIR } from './pipeline/ir';
 export { normalizeComposition } from './utils/normalize';

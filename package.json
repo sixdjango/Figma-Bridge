@@ -18,6 +18,7 @@
     "render-content": "ts-node src/cli/render-content.ts",
     "diff-images": "ts-node src/cli/diff-images.ts",
     "test-fixtures": "ts-node src/cli/test-fixtures.ts",
+    "generate-vite": "ts-node src/cli/generate-vite-preview.ts",
     "lint": "eslint src/**/*.ts",
     "lint:fix": "eslint src/**/*.ts --fix"
   },
