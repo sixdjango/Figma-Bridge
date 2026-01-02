@@ -30,6 +30,7 @@ export type JsxParseResult = {
   rootTag: string;
   rootClassName: string;
   rootStyleObj: Record<string, string>;
+  rootDynamicStyles?: Map<string, { template: string; imports: string[] }>;
   rootOtherAttrs: Record<string, string>;
   innerJsx: string;
   fullJsx: string;
@@ -48,6 +49,69 @@ type ReactifyOptions = {
 const VOID_ELEMENTS = new Set([
   'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr'
 ]);
+
+/**
+ * Result of splitting HTML by slice node IDs
+ */
+export type HtmlSplitResult = {
+  /** Layout HTML with slice placeholders */
+  layoutHtml: string;
+  /** Extracted slice HTML fragments by node ID */
+  slices: Map<string, { html: string; nodeId: string }>;
+};
+
+/**
+ * Split HTML by extracting elements with specified node IDs
+ * and replacing them with component placeholders
+ *
+ * @param html - Full HTML content
+ * @param sliceNodeIds - Array of node IDs to extract as slices
+ * @param sliceNameMap - Map from nodeId to component name
+ * @returns Split result with layout HTML and extracted slice HTML
+ */
+export function splitHtmlByNodeIds(
+  html: string,
+  sliceNodeIds: string[],
+  sliceNameMap: Map<string, string>
+): HtmlSplitResult {
+  if (!sliceNodeIds.length) {
+    return { layoutHtml: html, slices: new Map() };
+  }
+
+  const parsed = parseHTML(html || '');
+  const doc = parsed.document;
+  const slices = new Map<string, { html: string; nodeId: string }>();
+
+  for (const nodeId of sliceNodeIds) {
+    // Find element with data-node-id attribute
+    const element = doc.querySelector(`[data-node-id="${nodeId}"]`);
+    if (!element) continue;
+
+    // Get the outer HTML of this element
+    const sliceHtml = element.outerHTML;
+    slices.set(nodeId, { html: sliceHtml, nodeId });
+
+    // Get the component name for this slice
+    const componentName = sliceNameMap.get(nodeId);
+    if (componentName) {
+      // Create placeholder element
+      const placeholder = doc.createElement(componentName);
+      // Copy key attributes for positioning
+      const style = element.getAttribute('style');
+      const className = element.getAttribute('class');
+      if (style) placeholder.setAttribute('style', style);
+      if (className) placeholder.setAttribute('className', className);
+
+      // Replace the element with placeholder
+      element.parentNode?.replaceChild(placeholder, element);
+    }
+  }
+
+  // Get the modified HTML
+  const layoutHtml = doc.body?.innerHTML || doc.documentElement?.outerHTML || html;
+
+  return { layoutHtml, slices };
+}
 
 function stripQueryAndHash(src: string): string {
   return src.split(/[?#]/)[0];
@@ -113,12 +177,104 @@ function shouldExcludeProperty(prop: string, excludeList?: string[]): boolean {
   });
 }
 
-function parseStyleToObject(style: string, pxToRemOptions?: PxToRemOptions): Record<string, string> {
-  const result: Record<string, string> = {};
+type StyleParseOptions = {
+  pxToRem?: PxToRemOptions;
+  assetImportMode?: AssetImportMode;
+  assetImports?: Map<string, AssetImport>;
+  assetImportRefs?: Set<AssetImport>;
+};
+
+type StyleParseResult = {
+  styleObj: Record<string, string>;
+  /** Style entries that contain asset imports and need special JSX rendering */
+  dynamicStyles: Map<string, { template: string; imports: string[] }>;
+};
+
+/**
+ * Extract url() paths from a CSS value
+ */
+function extractUrlPaths(value: string): string[] {
+  const urls: string[] = [];
+  const regex = /url\(\s*['"]?([^'")\s]+)['"]?\s*\)/g;
+  let match;
+  while ((match = regex.exec(value)) !== null) {
+    urls.push(match[1]);
+  }
+  return urls;
+}
+
+/**
+ * Process a style value that may contain url() references
+ * Returns the processed value and any asset imports needed
+ */
+function processStyleUrlValue(
+  value: string,
+  options: StyleParseOptions
+): { value: string; dynamicValue?: string; imports: AssetImport[] } {
+  const urls = extractUrlPaths(value);
+  if (urls.length === 0) {
+    return { value, imports: [] };
+  }
+
+  const { assetImportMode, assetImports, assetImportRefs } = options;
+  if (!assetImportMode || !assetImports) {
+    return { value, imports: [] };
+  }
+
+  const foundImports: AssetImport[] = [];
+  let dynamicValue = value;
+  let hasReplacement = false;
+
+  for (const url of urls) {
+    if (shouldSkipAssetImport(url)) continue;
+
+    const ext = getAssetExtension(url);
+    if (!ext) continue;
+
+    const kind: 'image' | 'svg' = ext === 'svg' ? 'svg' : 'image';
+    const kindMode = kind === 'svg' ? (assetImportMode.svg ?? 'none') : (assetImportMode.image ?? 'none');
+    if (kindMode === 'none') continue;
+
+    // For background images, we always use URL mode (not component mode)
+    let assetImport = assetImports.get(url);
+    if (!assetImport) {
+      const baseName = getAssetBaseName(url);
+      const prefix = kind === 'svg' ? 'Svg' : 'Img';
+      const usedNames = new Set(Array.from(assetImports.values()).map((v) => v.localName));
+      const localName = ensureUniqueName(buildImportName(baseName, prefix), usedNames);
+      assetImport = { kind, localName, importPath: url, useComponent: false };
+      assetImports.set(url, assetImport);
+    }
+
+    if (assetImportRefs) assetImportRefs.add(assetImport);
+    foundImports.push(assetImport);
+
+    // Replace url('path') with url(${importName})
+    const urlPattern = new RegExp(`url\\(\\s*['"]?${escapeRegex(url)}['"]?\\s*\\)`, 'g');
+    dynamicValue = dynamicValue.replace(urlPattern, `url(\${${assetImport.localName}})`);
+    hasReplacement = true;
+  }
+
+  return {
+    value: hasReplacement ? dynamicValue : value,
+    dynamicValue: hasReplacement ? dynamicValue : undefined,
+    imports: foundImports,
+  };
+}
+
+function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function parseStyleToObject(style: string, options: StyleParseOptions = {}): StyleParseResult {
+  const styleObj: Record<string, string> = {};
+  const dynamicStyles = new Map<string, { template: string; imports: string[] }>();
+
   const entries = (style || '')
     .split(';')
     .map((part) => part.trim())
     .filter(Boolean);
+
   for (const entry of entries) {
     const idx = entry.indexOf(':');
     if (idx <= 0) continue;
@@ -126,24 +282,49 @@ function parseStyleToObject(style: string, pxToRemOptions?: PxToRemOptions): Rec
     let rawVal = entry.slice(idx + 1).trim();
     if (!rawKey) continue;
 
+    // Process url() references in style values
+    const urlResult = processStyleUrlValue(rawVal, options);
+    rawVal = urlResult.value;
+
     // Apply px→rem conversion if enabled
-    if (pxToRemOptions?.enabled && !shouldExcludeProperty(rawKey, pxToRemOptions.excludeProperties)) {
-      rawVal = convertPxToRem(rawVal, pxToRemOptions);
+    if (options.pxToRem?.enabled && !shouldExcludeProperty(rawKey, options.pxToRem.excludeProperties)) {
+      rawVal = convertPxToRem(rawVal, options.pxToRem);
     }
 
     const key = toCamelCase(rawKey);
-    result[key] = rawVal;
+    styleObj[key] = rawVal;
+
+    // Track dynamic styles that need template literal rendering
+    if (urlResult.dynamicValue) {
+      dynamicStyles.set(key, {
+        template: rawVal,
+        imports: urlResult.imports.map((i) => i.localName),
+      });
+    }
   }
-  return result;
+
+  return { styleObj, dynamicStyles };
 }
 
-function styleObjectToLiteral(obj: Record<string, string>): string {
-  const kvs = Object.entries(obj).map(([k, v]) => `'${k}': ${JSON.stringify(v)}`);
+function styleObjectToLiteral(
+  obj: Record<string, string>,
+  dynamicStyles?: Map<string, { template: string; imports: string[] }>
+): string {
+  const kvs = Object.entries(obj).map(([k, v]) => {
+    // Check if this is a dynamic style with template literal
+    const dynamic = dynamicStyles?.get(k);
+    if (dynamic && dynamic.template.includes('${')) {
+      // Use template literal for values containing imports
+      return `'${k}': \`${dynamic.template}\``;
+    }
+    return `'${k}': ${JSON.stringify(v)}`;
+  });
   return `{ ${kvs.join(', ')} }`;
 }
 
-function styleToObjectLiteral(style: string, pxToRemOptions?: PxToRemOptions): string {
-  return styleObjectToLiteral(parseStyleToObject(style, pxToRemOptions));
+function styleToObjectLiteral(style: string, options: StyleParseOptions = {}): string {
+  const result = parseStyleToObject(style, options);
+  return styleObjectToLiteral(result.styleObj, result.dynamicStyles);
 }
 
 function indentLines(str: string, level: number): string {
@@ -255,7 +436,12 @@ function nodeToJsx(node: any, depth: number, options: ReactifyOptions): string {
     if (assetImport && !assetImport.useComponent && attrLower === 'src') {
       attrParts.push(`src={${assetImport.localName}}`);
     } else if (attrLower === 'style') {
-      attrParts.push(`style={${styleToObjectLiteral(val, options.pxToRem)}}`);
+      attrParts.push(`style={${styleToObjectLiteral(val, {
+        pxToRem: options.pxToRem,
+        assetImportMode: options.assetImportMode,
+        assetImports: options.assetImports,
+        assetImportRefs: options.assetImportRefs,
+      })}}`);
     } else {
       attrParts.push(`${name}=${JSON.stringify(val)}`);
     }
@@ -326,7 +512,13 @@ export function parseHtmlForComponent(html: string, options: ReactifyOptions = {
   const rootTag = (root.localName || root.tagName || 'div').toString().toLowerCase();
   const rootClassName = root.getAttribute('class') || '';
   const rootStyleStr = root.getAttribute('style') || '';
-  const rootStyleObj = parseStyleToObject(rootStyleStr, options.pxToRem);
+  const styleParseResult = parseStyleToObject(rootStyleStr, {
+    pxToRem: options.pxToRem,
+    assetImportMode: options.assetImportMode,
+    assetImports: options.assetImports,
+    assetImportRefs: options.assetImportRefs,
+  });
+  const rootStyleObj = styleParseResult.styleObj;
 
   // Collect other attributes
   const rootOtherAttrs: Record<string, string> = {};
@@ -350,6 +542,7 @@ export function parseHtmlForComponent(html: string, options: ReactifyOptions = {
     rootTag,
     rootClassName,
     rootStyleObj,
+    rootDynamicStyles: styleParseResult.dynamicStyles.size > 0 ? styleParseResult.dynamicStyles : undefined,
     rootOtherAttrs,
     innerJsx,
     fullJsx,
@@ -421,8 +614,8 @@ export function buildReactComponentWithProps(options: ComponentBuildOptions): st
     return lines.join('\n');
   }
 
-  // Build base style object literal
-  const baseStyleLiteral = styleObjectToLiteral(parsed.rootStyleObj);
+  // Build base style object literal (with dynamic styles for background images etc.)
+  const baseStyleLiteral = styleObjectToLiteral(parsed.rootStyleObj, parsed.rootDynamicStyles);
 
   // Build other attrs string
   const otherAttrParts: string[] = [];

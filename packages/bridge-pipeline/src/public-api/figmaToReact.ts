@@ -2,7 +2,14 @@ import { normalizeComposition } from '../utils/normalize';
 import { compositionToIR } from '../pipeline/ir';
 import { createContentAssets } from '../pipeline/html';
 import { applyAssetUrlProvider, type AssetUrlProvider } from '../utils/asset-mapper';
-import { parseHtmlForComponent, buildReactComponentWithProps, htmlFragmentToJsx, type AssetImport, type AssetImportMode, type PxToRemOptions } from '../utils/react-builder';
+import {
+  parseHtmlForComponent,
+  buildReactComponentWithProps,
+  splitHtmlByNodeIds,
+  type AssetImport,
+  type AssetImportMode,
+  type PxToRemOptions,
+} from '../utils/react-builder';
 import type { CustomComponentDef, Rect } from '../pipeline/types';
 
 type SliceInput = { components?: CustomComponentDef[]; figmaJson?: any; name?: string };
@@ -75,17 +82,6 @@ function buildAssetImportLines(assetImports?: AssetImport[]): string[] {
     lines.push(line);
   }
   return lines;
-}
-
-function deriveSliceName(slice: SliceInput, index: number): string {
-  const fromDef = (slice.components || []).find((c) => String(c.componentType || '').toUpperCase() === 'SLICE');
-  if (fromDef?.type) return sanitizeComponentName(fromDef.type, `Slice${index + 1}`);
-  if (slice.name) return sanitizeComponentName(slice.name, `Slice${index + 1}`);
-  return `Slice${index + 1}`;
-}
-
-function buildImportsForSlices(sliceFiles: ReactComponentFile[]): string[] {
-  return sliceFiles.map((sf) => `import ${sf.name} from './${sf.fileName.replace(/\.jsx$/, '')}';`);
 }
 
 function resolveInput(
@@ -168,63 +164,171 @@ async function buildReactComponent(
   };
 }
 
+/**
+ * Extract slice definitions from components array
+ * Returns map of nodeId -> sliceName
+ */
+function extractSliceDefinitions(
+  components: CustomComponentDef[] | undefined
+): Map<string, { nodeId: string; name: string; def: CustomComponentDef }> {
+  const sliceMap = new Map<string, { nodeId: string; name: string; def: CustomComponentDef }>();
+  if (!Array.isArray(components)) return sliceMap;
+
+  components.forEach((c, i) => {
+    if (String(c.componentType || '').toUpperCase() === 'SLICE' && c.nodeId) {
+      const name = sanitizeComponentName(c.type, `Slice${i + 1}`);
+      sliceMap.set(c.nodeId, { nodeId: c.nodeId, name, def: c });
+    }
+  });
+
+  return sliceMap;
+}
+
+/**
+ * Build import statements for slices by name
+ */
+function buildSliceImportsByName(sliceNames: string[]): string[] {
+  return sliceNames.map((name) => `import ${name} from './${name}';`);
+}
+
 export async function figmaToReact(
   input: { composition?: any; components?: CustomComponentDef[] } | SplitCompositionInput,
   options: FigmaToReactOptions = {}
 ): Promise<FigmaToReactResult> {
-  const { layout, slices, isSplit } = resolveInput(input as any);
+  const { layout } = resolveInput(input as any);
   const sharedAssetImports = options.assetImportMode ? new Map<string, AssetImport>() : undefined;
-  const sliceComponents = Array.isArray(slices)
-    ? slices.reduce<CustomComponentDef[]>((acc, cur) => {
-        if (Array.isArray(cur?.components)) acc.push(...cur.components!);
-        return acc;
-      }, [])
-    : [];
-  const layoutComponents: CustomComponentDef[] = [
-    ...(Array.isArray(layout.components) ? layout.components : []),
-    ...sliceComponents,
-  ];
 
-  const sliceOutputs: ReactComponentFile[] = [];
-  if (isSplit && Array.isArray(slices)) {
-    for (let i = 0; i < slices.length; i++) {
-      const slice = slices[i];
-      if (!slice?.figmaJson) continue;
-      const sliceName = deriveSliceName(slice, i);
-      const sliceResult = await buildReactComponent(
-        slice.figmaJson,
-        slice.components,
-        sliceName,
-        options,
-        [],
-        sharedAssetImports
-      );
-      sliceOutputs.push(sliceResult);
-    }
-  }
+  // Extract slice definitions from layout components
+  const sliceDefinitions = extractSliceDefinitions(layout.components);
+  const sliceNodeIds = Array.from(sliceDefinitions.keys());
+  const sliceNames = Array.from(sliceDefinitions.values()).map((s) => s.name);
 
-  const layoutImports = isSplit ? buildImportsForSlices(sliceOutputs) : [];
-  const layoutResult = await buildReactComponent(
-    layout.figmaJson,
-    layoutComponents,
-    'Layout',
-    options,
-    layoutImports,
-    sharedAssetImports
-  );
-
-  const imageSet = new Set<string>();
-  const svgSet = new Set<string>();
-  [layoutResult, ...sliceOutputs].forEach((r: any) => {
-    r.assets?.images?.forEach((img: string) => imageSet.add(img));
-    r.assets?.svgs?.forEach((svg: string) => svgSet.add(svg));
+  // Build nodeId -> sliceName map for HTML splitting
+  const sliceNameMap = new Map<string, string>();
+  sliceDefinitions.forEach((info, nodeId) => {
+    sliceNameMap.set(nodeId, info.name);
   });
 
+  // STEP 1: Generate FULL layout HTML (without slice component replacement)
+  // This renders all content including slice areas as regular HTML
+  normalizeComposition(layout.figmaJson);
+
+  // For full layout generation, exclude slice component definitions
+  // so the slice content is rendered as regular HTML elements
+  const nonSliceComponents = (layout.components || []).filter(
+    (c) => String(c.componentType || '').toUpperCase() !== 'SLICE'
+  );
+
+  const ir = compositionToIR(layout.figmaJson, { customComponents: nonSliceComponents });
+  const content = await createContentAssets({
+    composition: layout.figmaJson,
+    irNodes: ir.nodes,
+    cssRules: ir.cssRules,
+    renderUnion: ir.renderUnion,
+    debugEnabled: false,
+  });
+
+  const mapped = applyAssetUrlProvider(content.bodyHtml, content.cssText, ir.nodes, options.assetUrlProvider);
+  const fullHtml = mapped.htmlFragment || mapped.html;
+  const fullCss = mapped.cssText;
+
+  // STEP 2: Split HTML by slice node IDs
+  const splitResult = splitHtmlByNodeIds(fullHtml, sliceNodeIds, sliceNameMap);
+
+  // STEP 3: Build slice components from extracted HTML
+  const sliceOutputs: ReactComponentFile[] = [];
+  const localAssetImports = sharedAssetImports ?? (options.assetImportMode ? new Map<string, AssetImport>() : undefined);
+  const assetImportRefs = localAssetImports ? new Set<AssetImport>() : undefined;
+
+  for (const [nodeId, sliceInfo] of splitResult.slices) {
+    const sliceDef = sliceDefinitions.get(nodeId);
+    if (!sliceDef) continue;
+
+    const componentTags = buildComponentTagMap(nonSliceComponents);
+    const skipChildrenTags = new Set(componentTags.keys());
+
+    // Parse slice HTML
+    const parsed = parseHtmlForComponent(sliceInfo.html, {
+      componentTags,
+      skipChildrenTags,
+      assetImportMode: options.assetImportMode,
+      assetImports: localAssetImports,
+      assetImportRefs,
+      pxToRem: options.pxToRem,
+    });
+
+    const usedAssetImports = assetImportRefs ? Array.from(assetImportRefs) : [];
+    const assetImportLines = buildAssetImportLines(usedAssetImports);
+
+    // Build slice component - slices share the layout's CSS
+    const code = buildReactComponentWithProps({
+      componentName: sliceDef.name,
+      parsed,
+      cssText: fullCss, // Share the full CSS with each slice
+      imports: assetImportLines,
+      exportDefault: true,
+    });
+
+    sliceOutputs.push({
+      name: sliceDef.name,
+      fileName: `${sliceDef.name}.jsx`,
+      code,
+      jsx: parsed.fullJsx,
+      cssText: fullCss,
+      baseWidth: content.baseWidth,
+      baseHeight: content.baseHeight,
+      renderUnion: ir.renderUnion,
+      assetImports: usedAssetImports,
+    });
+  }
+
+  // STEP 4: Build layout component from modified HTML (with slice placeholders)
+  const sliceImports = buildSliceImportsByName(sliceNames);
+  const layoutComponentTags = buildComponentTagMap(nonSliceComponents);
+
+  // Add slice names to component tags for JSX conversion
+  sliceNames.forEach((name) => {
+    layoutComponentTags.set(name.toLowerCase(), name);
+  });
+
+  const layoutParsed = parseHtmlForComponent(splitResult.layoutHtml, {
+    componentTags: layoutComponentTags,
+    skipChildrenTags: new Set(sliceNames.map((n) => n.toLowerCase())),
+    assetImportMode: options.assetImportMode,
+    assetImports: localAssetImports,
+    assetImportRefs,
+    pxToRem: options.pxToRem,
+  });
+
+  const layoutAssetImports = assetImportRefs ? Array.from(assetImportRefs) : [];
+  const layoutAssetImportLines = buildAssetImportLines(layoutAssetImports);
+
+  const layoutCode = buildReactComponentWithProps({
+    componentName: 'Layout',
+    parsed: layoutParsed,
+    cssText: fullCss,
+    imports: [...sliceImports, ...layoutAssetImportLines],
+    exportDefault: true,
+  });
+
+  const layoutResult: ReactComponentFile = {
+    name: 'Layout',
+    fileName: 'Layout.jsx',
+    code: layoutCode,
+    jsx: layoutParsed.fullJsx,
+    cssText: fullCss,
+    baseWidth: content.baseWidth,
+    baseHeight: content.baseHeight,
+    renderUnion: ir.renderUnion,
+    assetImports: layoutAssetImports,
+  };
+
+  // Collect all assets
   const allAssetImports = sharedAssetImports ? Array.from(sharedAssetImports.values()) : undefined;
   return {
     layout: layoutResult,
     slices: sliceOutputs,
-    assets: { images: Array.from(imageSet), svgs: Array.from(svgSet) },
+    assets: { images: ir.assetMeta.images || [], svgs: ir.assetMeta.svgs || [] },
     assetImports: allAssetImports,
   };
 }

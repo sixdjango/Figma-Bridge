@@ -453,6 +453,8 @@ function renderWrapperBox(cfg: RenderBoxConfig): string {
   });
 
   const attrs: Record<string, string> = { class: outerClass, style: outer };
+  // Always include data-node-id for slice extraction support
+  attrs['data-node-id'] = id;
   if (opts?.mode === 'debug') attrs['data-layer-id'] = id;
   const innerAttrs: Record<string, string> = { class: innerClass + innerClassExtra, style: inner };
   if (opts?.mode === 'content' && opts?.hasStroke) innerAttrs['data-layer-id'] = id;
@@ -484,6 +486,8 @@ function renderSingleBox(cfg: RenderBoxConfig): string {
   const containerPart = opts?.mode === 'debug' ? cssSeg.containerCss : '';
   const style = `${baseStart}${sizeCss}${cleaned.css}${containerPart}`;
   const attrs: Record<string, string> = { class: className, style };
+  // Always include data-node-id for slice extraction support
+  attrs['data-node-id'] = id;
   if (opts?.mode === 'debug') attrs['data-layer-id'] = id;
   else if (opts?.mode === 'content' && opts?.hasStroke) attrs['data-layer-id'] = id;
   const mergedAttrs = mergeAttrs(attrs, cfg.customAttributes);
