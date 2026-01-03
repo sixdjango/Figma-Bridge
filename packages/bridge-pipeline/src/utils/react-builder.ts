@@ -152,8 +152,11 @@ export type ConsumedNodeExtractResult = {
 };
 
 /**
- * Extract consumed nodes from rendered HTML
- * These are nodes referenced in component props that need to be passed as JSX props
+ * Extract consumed nodes from rendered HTML and clean up custom component children
+ *
+ * Process order:
+ * 1. First extract nodes referenced in component props (consumed nodes)
+ * 2. Then clear all children from custom component nodes (they shouldn't have Figma-rendered children)
  *
  * @param html - Full rendered HTML
  * @param consumedNodeIds - Set of node IDs to extract
@@ -163,24 +166,41 @@ export function extractConsumedNodesFromHtml(
   html: string,
   consumedNodeIds: Set<string>
 ): ConsumedNodeExtractResult {
-  if (!consumedNodeIds.size) {
-    return { html, extractedNodes: new Map() };
-  }
-
   const parsed = parseHTML(html || '');
   const doc = parsed.document;
   const extractedNodes = new Map<string, string>();
 
+  // Step 1: Find all custom component nodes (have data-component-type attribute)
+  const customComponents = doc.querySelectorAll('[data-component-type]');
+
+  // Step 2: For each custom component, extract any consumed nodes from its children first
+  for (const component of customComponents) {
+    for (const nodeId of consumedNodeIds) {
+      // Check if this consumed node is inside this component
+      const consumedElement = component.querySelector(`[data-node-id="${nodeId}"]`);
+      if (consumedElement && !extractedNodes.has(nodeId)) {
+        // Extract the HTML before clearing children
+        extractedNodes.set(nodeId, consumedElement.outerHTML);
+      }
+    }
+  }
+
+  // Step 3: Extract any remaining consumed nodes that are not inside components
   for (const nodeId of consumedNodeIds) {
-    // Find element with data-node-id attribute
+    if (extractedNodes.has(nodeId)) continue;
     const element = doc.querySelector(`[data-node-id="${nodeId}"]`);
     if (!element) continue;
-
-    // Get the outer HTML of this element
     extractedNodes.set(nodeId, element.outerHTML);
-
     // Remove the element from the document
     element.parentNode?.removeChild(element);
+  }
+
+  // Step 4: Clear all children from custom component nodes
+  for (const component of customComponents) {
+    // Clear all children
+    while (component.firstChild) {
+      component.removeChild(component.firstChild);
+    }
   }
 
   // Get the modified HTML
@@ -532,6 +552,12 @@ function componentPropToJsx(comp: ComponentPropDef, options: ReactifyOptions): s
           (rootEl as any).setAttribute('data-import-way', comp.importWay || 'NAMED');
         }
 
+        // Clear children - component props should not have Figma-rendered children
+        // The component will render its own content based on props
+        while ((rootEl as any).firstChild) {
+          (rootEl as any).removeChild((rootEl as any).firstChild);
+        }
+
         // Merge component props into the element (component props take precedence)
         if (comp.props && typeof comp.props === 'object') {
           for (const [key, val] of Object.entries(comp.props)) {
@@ -656,8 +682,8 @@ function nodeToJsx(node: any, depth: number, options: ReactifyOptions): string {
     const attrLower = attr.toLowerCase();
     if (isSvgComponent && (attrLower === 'src' || attrLower === 'alt')) continue;
 
-    // Skip some data- attributes (but keep data-component-lib and data-import-way for jsx-parser)
-    if (attrLower === 'data-component-type' || attrLower === 'data-node-id') continue;
+    // Skip data-component-type (internal use only), keep data-node-id for debugging
+    if (attrLower === 'data-component-type') continue;
 
     // Handle component prop attributes (data-component-prop-*)
     if (attrLower.startsWith('data-component-prop-')) {
@@ -774,9 +800,9 @@ export function parseHtmlForComponent(html: string, options: ReactifyOptions = {
   for (const attr of root.getAttributeNames()) {
     const attrLower = attr.toLowerCase();
     if (attrLower === 'class' || attrLower === 'style') continue;
-    // Skip internal data- attributes
+    // Skip internal data- attributes (keep data-node-id for debugging)
     if (attrLower === 'data-component-type' || attrLower === 'data-component-lib' ||
-        attrLower === 'data-import-way' || attrLower === 'data-node-id') continue;
+        attrLower === 'data-import-way') continue;
 
     // Handle component prop attributes
     if (attrLower.startsWith('data-component-prop-')) {
