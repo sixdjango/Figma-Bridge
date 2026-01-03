@@ -12,10 +12,41 @@ import { buildContent } from './content-builder';
 import { computeEffectsMode, shouldInheritShadows } from '../utils/effects-mode';
 import type { FigmaNode, CompositionInput } from '../types/figma';
 
+/**
+ * Recursively collect node IDs that are used as component prop values.
+ * These nodes should NOT be rendered separately in the main content tree.
+ */
+function collectConsumedNodeIds(props: Record<string, any> | undefined, result: Set<string>): void {
+  if (!props || typeof props !== 'object') return;
+  for (const value of Object.values(props)) {
+    if (value && typeof value === 'object') {
+      // Check if this is a component prop with a nodeId
+      if (typeof value.nodeId === 'string' && value.nodeId) {
+        result.add(value.nodeId);
+        // Recursively check nested props
+        if (value.props) {
+          collectConsumedNodeIds(value.props, result);
+        }
+      }
+    }
+  }
+}
+
+export type CompositionIRResult = {
+  nodes: RenderNodeIR[];
+  cssRules: string;
+  rawComposition: any;
+  renderUnion: { x: number; y: number; width: number; height: number };
+  fontMeta: { fonts: { family: string; weights: number[]; styles: string[] }[] };
+  assetMeta: { images: string[]; svgs?: string[] };
+  /** Set of node IDs that are referenced in component props */
+  consumedNodeIds?: Set<string>;
+};
+
 export function compositionToIR(
   composition: CompositionInput | { absOrigin?: { x: number; y: number }; children?: FigmaNode[] },
   options?: { customComponents?: CustomComponentDef[] }
-): { nodes: RenderNodeIR[]; cssRules: string; rawComposition: any; renderUnion: { x: number; y: number; width: number; height: number }; fontMeta: { fonts: { family: string; weights: number[]; styles: string[] }[] }; assetMeta: { images: string[]; svgs?: string[] } } {
+): CompositionIRResult {
   if (!composition || typeof composition !== 'object') throw new Error('Invalid composition');
   const children = Array.isArray(composition.children) ? composition.children : [];
   if (!children.length) return { nodes: [], cssRules: '', rawComposition: composition, renderUnion: { x: 0, y: 0, width: 0, height: 0 }, fontMeta: { fonts: [] }, assetMeta: { images: [] } };
@@ -35,6 +66,8 @@ export function compositionToIR(
   const cssCollector = new CssCollector();
 
   const componentMap = new Map<string, CustomComponentDef>();
+  // Collect node IDs that are consumed by component props (should not be rendered separately)
+  const consumedNodeIds = new Set<string>();
   if (options?.customComponents && Array.isArray(options.customComponents)) {
     for (const def of options.customComponents) {
       if (!def || typeof def !== 'object') continue;
@@ -42,6 +75,10 @@ export function compositionToIR(
       const type = 'type' in def ? (def as any).type : undefined;
       if (typeof nodeId !== 'string' || typeof type !== 'string' || !nodeId || !type) continue;
       componentMap.set(String(nodeId), { ...def, nodeId: String(nodeId), type: String(type) });
+      // Collect node IDs used in props
+      if (def.props) {
+        collectConsumedNodeIds(def.props, consumedNodeIds);
+      }
     }
   }
 
@@ -56,7 +93,7 @@ export function compositionToIR(
 
   const nodes: RenderNodeIR[] = children
     .filter((n: FigmaNode) => n && n.visible !== false)
-    .map((child: FigmaNode) => nodeToIR(child, M_comp, cssCollector, undefined, undefined, componentMap));
+    .map((child: FigmaNode) => nodeToIR(child, M_comp, cssCollector, undefined, undefined, componentMap, consumedNodeIds));
 
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   children.forEach((ch: FigmaNode, index: number) => {
@@ -102,7 +139,15 @@ export function compositionToIR(
   nodes.forEach(collectSvgs);
   const assetMeta: { images: string[]; svgs: string[] } = { images: Array.from(imgSet), svgs: Array.from(svgSet) };
 
-  return { nodes, cssRules: cssCollector.toString(), rawComposition: composition, renderUnion, fontMeta: { fonts }, assetMeta };
+  return {
+    nodes,
+    cssRules: cssCollector.toString(),
+    rawComposition: composition,
+    renderUnion,
+    fontMeta: { fonts },
+    assetMeta,
+    consumedNodeIds: consumedNodeIds.size > 0 ? consumedNodeIds : undefined,
+  };
 }
 
 function collectBoxCssForNode(node: FigmaNode, cssCollector: CssCollector, inheritedShadows?: ShadowEffect[] | null): string {
@@ -187,7 +232,8 @@ export function nodeToIR(
   cssCollector: CssCollector,
   inheritedShadows?: ShadowEffect[] | null,
   flags?: { asFlexItem?: boolean; parentAxes?: ReturnType<typeof getLayoutAxes>; parentAlignItemsCss?: string | undefined; parentWrap?: string },
-  componentMap?: Map<string, CustomComponentDef>
+  componentMap?: Map<string, CustomComponentDef>,
+  consumedNodeIds?: Set<string>
 ): RenderNodeIR {
   if (!node) throw new Error('nodeToIR called with null/undefined node');
   if (node.visible === false) throw new Error(`Invisible node ${node.id} should have been filtered upstream`);
@@ -195,7 +241,7 @@ export function nodeToIR(
   const { kind, layout } = computeLayout(node, parentAbs, flags);
   const mode = computeEffectsMode(node);
   const style = collectStyle(node, kind, cssCollector, inheritedShadows, mode);
-  const content = buildContent(node, kind, parentAbs, cssCollector, inheritedShadows, mode, flags, componentMap);
+  const content = buildContent(node, kind, parentAbs, cssCollector, inheritedShadows, mode, flags, componentMap, consumedNodeIds);
   const rawStyle = buildRawStyle(node);
   const svgFileProp = svgIdToFile(node);
 

@@ -54,7 +54,8 @@ export function extractCustomComponentImports(jsx: string): CustomComponentImpor
   const seen = new Set<string>();
 
   // Match: <ComponentName ... data-component-lib="..." data-import-way="..." ...>
-  const regex = /<([A-Z][a-zA-Z0-9]*)\s+[^>]*data-component-lib="([^"]+)"[^>]*data-import-way="([^"]+)"[^>]*>/g;
+  // Use [^<]*? to stop at nested < which prevents consuming nested components in prop values
+  const regex = /<([A-Z][a-zA-Z0-9]*)\s+(?:[^<]*?)data-component-lib="([^"]+)"(?:[^<]*?)data-import-way="([^"]+)"/g;
   let match;
   while ((match = regex.exec(jsx)) !== null) {
     const [, componentName, fromLib, importWay] = match;
@@ -69,7 +70,8 @@ export function extractCustomComponentImports(jsx: string): CustomComponentImpor
   }
 
   // Also try alternative order: data-import-way before data-component-lib
-  const regex2 = /<([A-Z][a-zA-Z0-9]*)\s+[^>]*data-import-way="([^"]+)"[^>]*data-component-lib="([^"]+)"[^>]*>/g;
+  // Use [^<]*? to stop at nested < which prevents consuming nested components in prop values
+  const regex2 = /<([A-Z][a-zA-Z0-9]*)\s+(?:[^<]*?)data-import-way="([^"]+)"(?:[^<]*?)data-component-lib="([^"]+)"/g;
   while ((match = regex2.exec(jsx)) !== null) {
     const [, componentName, importWay, fromLib] = match;
     const key = `${componentName}:${fromLib}`;

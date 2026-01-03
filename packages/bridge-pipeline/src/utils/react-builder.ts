@@ -13,6 +13,26 @@ export type AssetImport = {
 };
 
 /**
+ * Component import for nested component props
+ */
+export type ComponentImport = {
+  localName: string;
+  fromLib: string;
+  importWay: 'DEFAULT' | 'NAMED' | string;
+};
+
+/**
+ * Parsed component prop definition
+ */
+export type ComponentPropDef = {
+  type: string;
+  nodeId?: string;
+  props?: Record<string, any>;
+  fromLib?: string;
+  importWay?: 'DEFAULT' | 'NAMED' | string;
+};
+
+/**
  * Options for converting px to rem in styles
  */
 export type PxToRemOptions = {
@@ -32,8 +52,12 @@ export type JsxParseResult = {
   rootStyleObj: Record<string, string>;
   rootDynamicStyles?: Map<string, { template: string; imports: string[] }>;
   rootOtherAttrs: Record<string, string>;
+  /** Component props on root element (parsed from data-component-prop-*) */
+  rootComponentProps?: Map<string, { propName: string; jsxExpr: string }>;
   innerJsx: string;
   fullJsx: string;
+  /** Component imports from component props */
+  componentImports?: Map<string, ComponentImport>;
 };
 
 type ReactifyOptions = {
@@ -44,6 +68,10 @@ type ReactifyOptions = {
   assetImports?: Map<string, AssetImport>;
   assetImportRefs?: Set<AssetImport>;
   pxToRem?: PxToRemOptions;
+  /** Collected component imports from component props */
+  componentImports?: Map<string, ComponentImport>;
+  /** Extracted HTML fragments for consumed nodes (used for component props) */
+  extractedNodes?: Map<string, string>;
 };
 
 const VOID_ELEMENTS = new Set([
@@ -111,6 +139,54 @@ export function splitHtmlByNodeIds(
   const layoutHtml = doc.body?.innerHTML || doc.documentElement?.outerHTML || html;
 
   return { layoutHtml, slices };
+}
+
+/**
+ * Result of extracting consumed nodes from HTML
+ */
+export type ConsumedNodeExtractResult = {
+  /** HTML with consumed nodes removed */
+  html: string;
+  /** Map of nodeId -> extracted outerHTML */
+  extractedNodes: Map<string, string>;
+};
+
+/**
+ * Extract consumed nodes from rendered HTML
+ * These are nodes referenced in component props that need to be passed as JSX props
+ *
+ * @param html - Full rendered HTML
+ * @param consumedNodeIds - Set of node IDs to extract
+ * @returns Result with modified HTML and extracted node HTML fragments
+ */
+export function extractConsumedNodesFromHtml(
+  html: string,
+  consumedNodeIds: Set<string>
+): ConsumedNodeExtractResult {
+  if (!consumedNodeIds.size) {
+    return { html, extractedNodes: new Map() };
+  }
+
+  const parsed = parseHTML(html || '');
+  const doc = parsed.document;
+  const extractedNodes = new Map<string, string>();
+
+  for (const nodeId of consumedNodeIds) {
+    // Find element with data-node-id attribute
+    const element = doc.querySelector(`[data-node-id="${nodeId}"]`);
+    if (!element) continue;
+
+    // Get the outer HTML of this element
+    extractedNodes.set(nodeId, element.outerHTML);
+
+    // Remove the element from the document
+    element.parentNode?.removeChild(element);
+  }
+
+  // Get the modified HTML
+  const modifiedHtml = doc.body?.innerHTML || doc.documentElement?.outerHTML || html;
+
+  return { html: modifiedHtml, extractedNodes };
 }
 
 function stripQueryAndHash(src: string): string {
@@ -401,6 +477,143 @@ function resolveAssetImport(src: string, options: ReactifyOptions): AssetImport 
   return entry;
 }
 
+const COMPONENT_PROP_PREFIX = '__COMPONENT_PROP__:';
+
+/**
+ * Parse a component prop from serialized format (base64 encoded)
+ */
+function parseComponentProp(value: string): ComponentPropDef | null {
+  if (!value.startsWith(COMPONENT_PROP_PREFIX)) return null;
+  try {
+    const base64 = value.slice(COMPONENT_PROP_PREFIX.length);
+    // Decode base64 to JSON string
+    const json = Buffer.from(base64, 'base64').toString('utf8');
+    const parsed = JSON.parse(json);
+    if (typeof parsed?.type === 'string') {
+      return parsed as ComponentPropDef;
+    }
+  } catch {
+    // ignore parse errors
+  }
+  return null;
+}
+
+/**
+ * Convert component prop to JSX expression
+ * If extractedNodes contains pre-rendered HTML for this node, convert that HTML to JSX
+ * Otherwise, build JSX from the component definition
+ */
+function componentPropToJsx(comp: ComponentPropDef, options: ReactifyOptions): string {
+  const componentName = comp.type;
+
+  // Register component import
+  if (comp.fromLib && options.componentImports) {
+    const importKey = `${comp.fromLib}:${componentName}`;
+    if (!options.componentImports.has(importKey)) {
+      options.componentImports.set(importKey, {
+        localName: componentName,
+        fromLib: comp.fromLib,
+        importWay: comp.importWay || 'NAMED',
+      });
+    }
+  }
+
+  // If we have pre-rendered HTML for this node, convert it to JSX
+  if (comp.nodeId && options.extractedNodes) {
+    const extractedHtml = options.extractedNodes.get(comp.nodeId);
+    if (extractedHtml) {
+      // Parse the extracted HTML fragment using getRoots which handles linkedom quirks
+      const roots = getRoots(extractedHtml);
+      const rootEl = roots.find((n: any) => n.nodeType === 1);
+      if (rootEl && (rootEl as any).tagName) {
+        // Add component lib attributes to the element
+        if (comp.fromLib) {
+          (rootEl as any).setAttribute('data-component-lib', comp.fromLib);
+          (rootEl as any).setAttribute('data-import-way', comp.importWay || 'NAMED');
+        }
+
+        // Merge component props into the element (component props take precedence)
+        if (comp.props && typeof comp.props === 'object') {
+          for (const [key, val] of Object.entries(comp.props)) {
+            if (key === 'style' && val && typeof val === 'object') {
+              // Merge styles: parse existing style, merge with component props style (higher priority)
+              const existingStyle = (rootEl as any).getAttribute('style') || '';
+              const existingStyleObj = parseStyleToObject(existingStyle).styleObj;
+              // Component props style entries (convert to CSS format for merging)
+              for (const [styleKey, styleVal] of Object.entries(val as Record<string, any>)) {
+                const cssKey = styleKey.replace(/([A-Z])/g, '-$1').toLowerCase();
+                const cssVal = typeof styleVal === 'number' ? `${styleVal}px` : String(styleVal);
+                existingStyleObj[toCamelCase(cssKey)] = cssVal;
+              }
+              // Rebuild style attribute
+              const mergedStyle = Object.entries(existingStyleObj)
+                .map(([k, v]) => `${k.replace(/([A-Z])/g, '-$1').toLowerCase()}:${v}`)
+                .join(';');
+              (rootEl as any).setAttribute('style', mergedStyle);
+            } else if (key === 'className' && typeof val === 'string') {
+              // Merge className: append component props className
+              const existingClass = (rootEl as any).getAttribute('class') || '';
+              const mergedClass = existingClass ? `${existingClass} ${val}` : val;
+              (rootEl as any).setAttribute('class', mergedClass);
+            } else if (typeof val === 'string') {
+              (rootEl as any).setAttribute(key, val);
+            } else if (typeof val === 'number' || typeof val === 'boolean') {
+              (rootEl as any).setAttribute(key, String(val));
+            } else if (val && typeof val === 'object') {
+              // For object props (like nested components), serialize as data attribute
+              // These will be handled by the JSX conversion
+              (rootEl as any).setAttribute(`data-prop-${key}`, JSON.stringify(val));
+            }
+          }
+        }
+
+        // Convert to JSX string
+        let jsx = nodeToJsx(rootEl, 0, options).trim();
+        // Replace the original tag name with the component name
+        const originalTag = (rootEl as any).tagName.toLowerCase();
+        // Replace opening tag: <div ... -> <ComponentName ...
+        jsx = jsx.replace(new RegExp(`^<${originalTag}(\\s|>|\\/)`, 'i'), `<${componentName}$1`);
+        // Replace closing tag: </div> -> </ComponentName>
+        jsx = jsx.replace(new RegExp(`</${originalTag}>$`, 'i'), `</${componentName}>`);
+        // Replace self-closing: <div .../> -> <ComponentName .../>
+        jsx = jsx.replace(new RegExp(`<${originalTag}([^>]*?)\\s*/>$`, 'i'), `<${componentName}$1 />`);
+        return jsx;
+      }
+    }
+  }
+
+  // Fallback: Build props string from component definition
+  const propParts: string[] = [];
+  if (comp.props && typeof comp.props === 'object') {
+    for (const [key, val] of Object.entries(comp.props)) {
+      if (key === 'style' && val && typeof val === 'object') {
+        // Convert style object to JSX style
+        const styleEntries = Object.entries(val).map(([k, v]) => {
+          const camelKey = k.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+          return `${camelKey}: ${JSON.stringify(v)}`;
+        });
+        propParts.push(`style={{ ${styleEntries.join(', ')} }}`);
+      } else if (key === 'className') {
+        propParts.push(`className=${JSON.stringify(val)}`);
+      } else if (typeof val === 'string') {
+        propParts.push(`${key}=${JSON.stringify(val)}`);
+      } else if (typeof val === 'number' || typeof val === 'boolean') {
+        propParts.push(`${key}={${val}}`);
+      } else if (val !== null && val !== undefined) {
+        propParts.push(`${key}={${JSON.stringify(val)}}`);
+      }
+    }
+  }
+
+  const propsStr = propParts.length ? ' ' + propParts.join(' ') : '';
+
+  // Include data-component-lib and data-import-way for jsx-parser to extract imports
+  const dataAttrs = comp.fromLib
+    ? ` data-component-lib="${comp.fromLib}" data-import-way="${comp.importWay || 'NAMED'}"`
+    : '';
+  return `<${componentName}${dataAttrs}${propsStr} />`;
+}
+
 function nodeToJsx(node: any, depth: number, options: ReactifyOptions): string {
   const indent = ' '.repeat(depth);
   if (node.nodeType === 3) {
@@ -424,10 +637,40 @@ function nodeToJsx(node: any, depth: number, options: ReactifyOptions): string {
     tagName = assetImport!.localName;
   }
 
+  // Check for direct custom component (has data-component-lib attribute)
+  const componentLib = node.getAttribute('data-component-lib');
+  const importWay = node.getAttribute('data-import-way') || 'NAMED';
+  if (componentLib && options.componentImports) {
+    const importKey = `${componentLib}:${tagName}`;
+    if (!options.componentImports.has(importKey)) {
+      options.componentImports.set(importKey, {
+        localName: tagName,
+        fromLib: componentLib,
+        importWay: importWay,
+      });
+    }
+  }
+
   const attrParts: string[] = [];
   for (const attr of node.getAttributeNames()) {
     const attrLower = attr.toLowerCase();
     if (isSvgComponent && (attrLower === 'src' || attrLower === 'alt')) continue;
+
+    // Skip some data- attributes (but keep data-component-lib and data-import-way for jsx-parser)
+    if (attrLower === 'data-component-type' || attrLower === 'data-node-id') continue;
+
+    // Handle component prop attributes (data-component-prop-*)
+    if (attrLower.startsWith('data-component-prop-')) {
+      const propName = attr.slice('data-component-prop-'.length);
+      const val = node.getAttribute(attr) ?? '';
+      const compProp = parseComponentProp(val);
+      if (compProp) {
+        const jsxExpr = componentPropToJsx(compProp, options);
+        attrParts.push(`${propName}={${jsxExpr}}`);
+      }
+      continue;
+    }
+
     let name = attr;
     if (attrLower === 'class') name = 'className';
     else if (attrLower === 'for') name = 'htmlFor';
@@ -492,12 +735,16 @@ export function htmlFragmentToJsx(html: string, options: ReactifyOptions = {}): 
 }
 
 export function parseHtmlForComponent(html: string, options: ReactifyOptions = {}): JsxParseResult {
+  // Initialize component imports map for tracking nested component props
+  const componentImports = options.componentImports || new Map<string, ComponentImport>();
+  const optionsWithImports: ReactifyOptions = { ...options, componentImports };
+
   const roots = getRoots(html);
   const elementRoots = roots.filter((n) => n.nodeType === 1);
 
   if (elementRoots.length !== 1) {
     // Multiple or no root elements - wrap in fragment
-    const fullJsx = htmlFragmentToJsx(html, options);
+    const fullJsx = htmlFragmentToJsx(html, optionsWithImports);
     return {
       rootTag: '',
       rootClassName: '',
@@ -505,6 +752,7 @@ export function parseHtmlForComponent(html: string, options: ReactifyOptions = {
       rootOtherAttrs: {},
       innerJsx: fullJsx,
       fullJsx,
+      componentImports: componentImports.size > 0 ? componentImports : undefined,
     };
   }
 
@@ -520,23 +768,40 @@ export function parseHtmlForComponent(html: string, options: ReactifyOptions = {
   });
   const rootStyleObj = styleParseResult.styleObj;
 
-  // Collect other attributes
+  // Collect other attributes and process component props
   const rootOtherAttrs: Record<string, string> = {};
+  const rootComponentProps = new Map<string, { propName: string; jsxExpr: string }>();
   for (const attr of root.getAttributeNames()) {
     const attrLower = attr.toLowerCase();
     if (attrLower === 'class' || attrLower === 'style') continue;
+    // Skip internal data- attributes
+    if (attrLower === 'data-component-type' || attrLower === 'data-component-lib' ||
+        attrLower === 'data-import-way' || attrLower === 'data-node-id') continue;
+
+    // Handle component prop attributes
+    if (attrLower.startsWith('data-component-prop-')) {
+      const propName = attr.slice('data-component-prop-'.length);
+      const val = root.getAttribute(attr) || '';
+      const compProp = parseComponentProp(val);
+      if (compProp) {
+        const jsxExpr = componentPropToJsx(compProp, optionsWithImports);
+        rootComponentProps.set(propName, { propName, jsxExpr });
+      }
+      continue;
+    }
+
     rootOtherAttrs[attr] = root.getAttribute(attr) || '';
   }
 
   // Generate inner JSX (children only)
   const childNodes = Array.from(root.childNodes || []);
   const innerParts = childNodes
-    .map((ch: any) => nodeToJsx(ch, options.indent ?? 2, options))
+    .map((ch: any) => nodeToJsx(ch, optionsWithImports.indent ?? 2, optionsWithImports))
     .filter(Boolean);
   const innerJsx = innerParts.join('\n');
 
   // Generate full JSX for reference
-  const fullJsx = nodeToJsx(root, options.indent ?? 2, options);
+  const fullJsx = nodeToJsx(root, optionsWithImports.indent ?? 2, optionsWithImports);
 
   return {
     rootTag,
@@ -544,8 +809,10 @@ export function parseHtmlForComponent(html: string, options: ReactifyOptions = {
     rootStyleObj,
     rootDynamicStyles: styleParseResult.dynamicStyles.size > 0 ? styleParseResult.dynamicStyles : undefined,
     rootOtherAttrs,
+    rootComponentProps: rootComponentProps.size > 0 ? rootComponentProps : undefined,
     innerJsx,
     fullJsx,
+    componentImports: componentImports.size > 0 ? componentImports : undefined,
   };
 }
 
@@ -578,6 +845,44 @@ export function buildReactComponentSource(
   return lines.join('\n');
 }
 
+/**
+ * Build import lines from component imports
+ */
+export function buildComponentImportLines(componentImports?: Map<string, ComponentImport>): string[] {
+  if (!componentImports || componentImports.size === 0) return [];
+
+  // Group imports by library
+  const byLib = new Map<string, ComponentImport[]>();
+  for (const imp of componentImports.values()) {
+    const list = byLib.get(imp.fromLib) || [];
+    list.push(imp);
+    byLib.set(imp.fromLib, list);
+  }
+
+  const lines: string[] = [];
+  for (const [lib, imps] of byLib) {
+    // Separate default and named imports
+    const defaultImports = imps.filter((i) => i.importWay === 'DEFAULT');
+    const namedImports = imps.filter((i) => i.importWay !== 'DEFAULT');
+
+    if (defaultImports.length > 0 && namedImports.length > 0) {
+      // Both default and named
+      const defaultName = defaultImports[0].localName;
+      const namedNames = namedImports.map((i) => i.localName).join(', ');
+      lines.push(`import ${defaultName}, { ${namedNames} } from '${lib}';`);
+    } else if (defaultImports.length > 0) {
+      // Only default
+      lines.push(`import ${defaultImports[0].localName} from '${lib}';`);
+    } else if (namedImports.length > 0) {
+      // Only named
+      const namedNames = namedImports.map((i) => i.localName).join(', ');
+      lines.push(`import { ${namedNames} } from '${lib}';`);
+    }
+  }
+
+  return lines;
+}
+
 export type ComponentBuildOptions = {
   componentName: string;
   parsed: JsxParseResult;
@@ -592,6 +897,11 @@ export function buildReactComponentWithProps(options: ComponentBuildOptions): st
   const importSet = new Set<string>();
   importSet.add("import React from 'react';");
   imports.filter(Boolean).forEach((imp) => importSet.add(imp));
+
+  // Add component imports from component props
+  const componentImportLines = buildComponentImportLines(parsed.componentImports);
+  componentImportLines.forEach((imp) => importSet.add(imp));
+
   const importSection = Array.from(importSet).join('\n');
   const cssLiteral = JSON.stringify(cssText || '');
 
@@ -617,10 +927,16 @@ export function buildReactComponentWithProps(options: ComponentBuildOptions): st
   // Build base style object literal (with dynamic styles for background images etc.)
   const baseStyleLiteral = styleObjectToLiteral(parsed.rootStyleObj, parsed.rootDynamicStyles);
 
-  // Build other attrs string
+  // Build other attrs string (including component props)
   const otherAttrParts: string[] = [];
   for (const [k, v] of Object.entries(parsed.rootOtherAttrs)) {
     otherAttrParts.push(`${k}=${JSON.stringify(v)}`);
+  }
+  // Add component props (e.g., leftIcon={<LeftCircleOutlined />})
+  if (parsed.rootComponentProps) {
+    for (const [, { propName, jsxExpr }] of parsed.rootComponentProps) {
+      otherAttrParts.push(`${propName}={${jsxExpr}}`);
+    }
   }
   const otherAttrsStr = otherAttrParts.length ? ' ' + otherAttrParts.join(' ') : '';
 

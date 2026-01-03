@@ -175,6 +175,33 @@ function styleObjectToCssString(style: Record<string, any>): string {
   return parts.join('; ');
 }
 
+/**
+ * Check if a value is a component prop definition
+ * Component props have: type (string), optionally fromLib, importWay
+ */
+function isComponentProp(value: any): value is CustomComponentDef {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  // Must have 'type' as string (component name)
+  if (typeof value.type !== 'string' || !value.type.trim()) return false;
+  // Should have either fromLib or importWay to distinguish from regular objects
+  return typeof value.fromLib === 'string' || typeof value.importWay === 'string';
+}
+
+/**
+ * Serialize a component prop to a special format for JSX conversion
+ * Format: __COMPONENT_PROP__:BASE64_JSON
+ * Using base64 to avoid HTML attribute escaping issues
+ *
+ * Note: The actual styles for consumed nodes are extracted from rendered HTML
+ * in figmaToReact using extractConsumedNodesFromHtml, not merged here.
+ */
+function serializeComponentProp(comp: CustomComponentDef): string {
+  const json = JSON.stringify(comp);
+  // Use base64 encoding to avoid HTML attribute parsing issues
+  const base64 = Buffer.from(json, 'utf8').toString('base64');
+  return `__COMPONENT_PROP__:${base64}`;
+}
+
 function buildCustomComponentAttrs(def?: CustomComponentDef): { tagName?: string; attrs?: Record<string, string> } {
   if (!def || typeof def.type !== 'string' || !def.type.trim()) return {};
   const attrs: Record<string, string> = {};
@@ -184,6 +211,11 @@ function buildCustomComponentAttrs(def?: CustomComponentDef): { tagName?: string
   if (def.props && typeof def.props === 'object') {
     for (const [k, v] of Object.entries(def.props)) {
       if (!k) continue;
+      // Special handling for component props (nested components like icons)
+      if (isComponentProp(v)) {
+        attrs[`data-component-prop-${k}`] = serializeComponentProp(v);
+        continue;
+      }
       // Special handling for style prop - convert object to CSS string
       if (k === 'style' && v && typeof v === 'object' && !Array.isArray(v)) {
         attrs[k] = styleObjectToCssString(v as Record<string, any>);
@@ -961,7 +993,7 @@ export async function createPreviewHtml(
     debugEnabled
   );
 
-  
+
   const overlayStr = debugEnabled ? debugHtml.join('\n') : '';
 
   const baseStyles = buildBaseStyles();
@@ -1012,7 +1044,7 @@ export async function createPreviewAssets(
 export async function createContentAssets(
   config: PreviewBuildInput
 ): Promise<{ bodyHtml: string; cssText: string; headLinks: string; baseWidth: number; baseHeight: number }> {
-  const { composition, irNodes, cssRules, renderUnion, debugEnabled = false } = config;
+  const { composition, irNodes, cssRules, renderUnion } = config;
   const { bounds } = composition;
 
   const { shapeHtml, usedClasses, viewport, contentLayerStyle, sharedCss } = await buildPreviewPieces(

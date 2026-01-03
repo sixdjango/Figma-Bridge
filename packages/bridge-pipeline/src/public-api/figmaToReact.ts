@@ -6,6 +6,7 @@ import {
   parseHtmlForComponent,
   buildReactComponentWithProps,
   splitHtmlByNodeIds,
+  extractConsumedNodesFromHtml,
   type AssetImport,
   type AssetImportMode,
   type PxToRemOptions,
@@ -120,19 +121,28 @@ async function buildReactComponent(
   });
 
   const mapped = applyAssetUrlProvider(content.bodyHtml, content.cssText, ir.nodes, options.assetUrlProvider);
+
+  // Extract consumed nodes from HTML (nodes used as component props)
+  // These will be passed as JSX props instead of being in the main HTML tree
+  const rawHtml = mapped.htmlFragment || mapped.html;
+  const { html: htmlWithoutConsumed, extractedNodes } = ir.consumedNodeIds
+    ? extractConsumedNodesFromHtml(rawHtml, ir.consumedNodeIds)
+    : { html: rawHtml, extractedNodes: new Map<string, string>() };
+
   const componentTags = buildComponentTagMap(components);
   const skipChildrenTags = new Set(componentTags.keys());
   const localAssetImports = assetImportMap ?? (options.assetImportMode ? new Map<string, AssetImport>() : undefined);
   const assetImportRefs = localAssetImports ? new Set<AssetImport>() : undefined;
 
   // Parse HTML and extract root element info for props merging
-  const parsed = parseHtmlForComponent(mapped.htmlFragment || mapped.html, {
+  const parsed = parseHtmlForComponent(htmlWithoutConsumed, {
     componentTags,
     skipChildrenTags,
     assetImportMode: options.assetImportMode,
     assetImports: localAssetImports,
     assetImportRefs,
     pxToRem: options.pxToRem,
+    extractedNodes,
   });
 
   const usedAssetImports = assetImportRefs ? Array.from(assetImportRefs) : [];
@@ -229,8 +239,13 @@ export async function figmaToReact(
   });
 
   const mapped = applyAssetUrlProvider(content.bodyHtml, content.cssText, ir.nodes, options.assetUrlProvider);
-  const fullHtml = mapped.htmlFragment || mapped.html;
+  const rawFullHtml = mapped.htmlFragment || mapped.html;
   const fullCss = mapped.cssText;
+
+  // Extract consumed nodes from HTML (nodes used as component props)
+  const { html: fullHtml, extractedNodes } = ir.consumedNodeIds
+    ? extractConsumedNodesFromHtml(rawFullHtml, ir.consumedNodeIds)
+    : { html: rawFullHtml, extractedNodes: new Map<string, string>() };
 
   // STEP 2: Split HTML by slice node IDs
   const splitResult = splitHtmlByNodeIds(fullHtml, sliceNodeIds, sliceNameMap);
@@ -258,6 +273,7 @@ export async function figmaToReact(
       assetImports: globalAssetImports,
       assetImportRefs: sliceAssetRefs,
       pxToRem: options.pxToRem,
+      extractedNodes,
     });
 
     // Only include imports actually used in this slice
@@ -305,6 +321,7 @@ export async function figmaToReact(
     assetImports: globalAssetImports,
     assetImportRefs: layoutAssetRefs,
     pxToRem: options.pxToRem,
+    extractedNodes,
   });
 
   // Only include imports actually used in layout (not slice imports)

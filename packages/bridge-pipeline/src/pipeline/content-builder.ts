@@ -18,7 +18,8 @@ export function buildContent(
   inheritedShadows?: ShadowEffect[] | null,
   effectsMode?: 'self' | 'inherit',
   flags?: { asFlexItem?: boolean },
-  componentMap?: Map<string, CustomComponentDef>
+  componentMap?: Map<string, CustomComponentDef>,
+  consumedNodeIds?: Set<string>
 ): any {
   if (kind === 'text' && node.text) {
     const html = renderTextSegments(node.text);
@@ -74,10 +75,10 @@ export function buildContent(
   for (const it of items) {
     if (it.kind === 'node') {
       const ch = children[(it as RenderNodeItem).index];
-      const childIR = processChildNode(ch, it as RenderNodeItem, ctx, componentMap);
+      const childIR = processChildNode(ch, it as RenderNodeItem, ctx, componentMap, consumedNodeIds);
       if (childIR) irKids.push(childIR);
     } else if (it.kind === 'masked') {
-      const maskedIRs = processMaskedGroup(it as RenderMaskedItem, ctx, componentMap);
+      const maskedIRs = processMaskedGroup(it as RenderMaskedItem, ctx, componentMap, consumedNodeIds);
       irKids.push(...maskedIRs);
     }
   }
@@ -98,9 +99,12 @@ function processChildNode(
     cssCollector: CssCollector;
     nextInherited: ShadowEffect[];
   },
-  componentMap?: Map<string, CustomComponentDef>
+  componentMap?: Map<string, CustomComponentDef>,
+  consumedNodeIds?: Set<string>
 ): RenderNodeIR | null {
   if (!ch || ch.visible === false) return null;
+  // Note: consumed nodes are no longer filtered here - they render normally
+  // and are extracted from HTML after rendering is complete
   const isFlexItem = ctx.parentIsAutoLayout && String(ch?.layoutPositioning || 'AUTO').toUpperCase() !== 'ABSOLUTE';
   const ir = nodeToIR(
     ch,
@@ -108,7 +112,8 @@ function processChildNode(
     ctx.cssCollector,
     ctx.nextInherited,
     isFlexItem ? { asFlexItem: true, parentAxes: ctx.parentAxes, parentAlignItemsCss: ctx.parentAlignItemsCss, parentWrap: ctx.subtree?.layoutWrap } : undefined,
-    componentMap
+    componentMap,
+    consumedNodeIds
   );
   if (ir && it && typeof (it as any).itemCss === 'string' && (it as any).itemCss) {
     const extra = String((it as any).itemCss);
@@ -131,12 +136,17 @@ function processMaskedGroup(
     cssCollector: CssCollector;
     nextInherited: ShadowEffect[];
   },
-  componentMap?: Map<string, CustomComponentDef>
+  componentMap?: Map<string, CustomComponentDef>,
+  consumedNodeIds?: Set<string>
 ): RenderNodeIR[] {
   const mask = ctx.children[it.maskIndex];
   if (!mask) throw new Error('processMaskedGroup: mask node missing');
   if (!Array.isArray(mask?.absoluteTransform)) throw new Error('processMaskedGroup: mask.absoluteTransform missing');
-  const maskedNodes = it.nodeIndices.map(i => ctx.children[i]).filter(n => n && n.visible !== false);
+  // Note: consumed nodes are no longer filtered here - they render normally
+  // and are extracted from HTML after rendering is complete
+  const maskedNodes = it.nodeIndices
+    .map(i => ctx.children[i])
+    .filter(n => n && n.visible !== false);
   if (maskedNodes.length === 0) return [];
   const M_local2 = matMul(ctx.invParent, mask.absoluteTransform);
   const a2 = M_local2[0][0], c2 = M_local2[0][1], e2 = M_local2[0][2];
@@ -171,7 +181,7 @@ function processMaskedGroup(
       transform2x2: { a: a2, b: b2, c: c2, d: d2 },
     },
     style: { boxCss: parts.join('') },
-    content: { type: 'children', nodes: maskedNodes.map(ch => nodeToIR(ch, mask.absoluteTransform as number[][], ctx.cssCollector, ctx.nextInherited, undefined, componentMap)) },
+    content: { type: 'children', nodes: maskedNodes.map(ch => nodeToIR(ch, mask.absoluteTransform as number[][], ctx.cssCollector, ctx.nextInherited, undefined, componentMap, consumedNodeIds)) },
     isMask: true,
     absoluteTransform: Array.isArray(mask?.absoluteTransform) ? mask.absoluteTransform : undefined,
     name: mask.name || 'Mask Container',

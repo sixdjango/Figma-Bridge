@@ -101,10 +101,19 @@ const defaultLogger = {
 };
 
 /**
+ * Convert svgId to safe filename (matches React pipeline logic)
+ * Same as svgIdToFile in ir.ts
+ */
+export function svgIdToFilename(svgId: string): string {
+  const safe = svgId.replace(/[^a-zA-Z0-9_-]/g, '_');
+  return safe + '.svg';
+}
+
+/**
  * Extract asset IDs from Figma JSON composition
  *
  * @param figmaJson - Figma composition JSON (with children array)
- * @returns Extracted image IDs and SVG node IDs
+ * @returns Extracted image IDs and SVG IDs (with filenames matching React pipeline)
  */
 export function extractAssetIds(figmaJson: any): ExtractedAssets {
   const imageIds = new Set<string>();
@@ -124,27 +133,10 @@ export function extractAssetIds(figmaJson: any): ExtractedAssets {
       }
     }
 
-    // Check if node should be exported as SVG
-    // SVG nodes typically have svgContent or are vector-like nodes
-    if (node.svgContent && typeof node.svgContent === 'string' && node.id) {
-      svgNodeIds.add(String(node.id));
-    }
-
-    // Also check for nodes marked for SVG export
-    const nodeType = String(node.type || '').toUpperCase();
-    if (
-      (nodeType === 'VECTOR' ||
-        nodeType === 'BOOLEAN_OPERATION' ||
-        nodeType === 'LINE' ||
-        nodeType === 'STAR' ||
-        nodeType === 'POLYGON' ||
-        nodeType === 'ELLIPSE') &&
-      node.id
-    ) {
-      // Vector nodes without svgContent need to be exported via API
-      if (!node.svgContent) {
-        svgNodeIds.add(String(node.id));
-      }
+    // Check for svgId (used by React pipeline for SVG file naming)
+    // This is the primary way SVGs are identified
+    if (typeof node.svgId === 'string' && node.svgId) {
+      svgNodeIds.add(node.svgId);
     }
 
     // Recurse into children
@@ -510,12 +502,12 @@ export class AssetDownloader {
   /**
    * Save SVGs from Figma API (SVG content)
    *
-   * @param svgNodeIds - Array of node IDs to export as SVG
+   * @param svgIds - Array of SVG IDs (svgId from nodes)
    * @param figmaApi - Figma API instance
    * @returns Download result
    */
-  async saveSvgsFromFigma(svgNodeIds: string[], figmaApi: FigmaApi): Promise<DownloadResult> {
-    if (!svgNodeIds.length) {
+  async saveSvgsFromFigma(svgIds: string[], figmaApi: FigmaApi): Promise<DownloadResult> {
+    if (!svgIds.length) {
       return { success: [], failed: [] };
     }
 
@@ -524,15 +516,14 @@ export class AssetDownloader {
     const failed: DownloadResult['failed'] = [];
 
     try {
-      // Get SVG content for all nodes
-      this.logger.info(`Fetching ${svgNodeIds.length} SVGs from Figma API...`);
-      const svgContentMap = await figmaApi.getSvgs(svgNodeIds);
+      // Get SVG content for all IDs
+      this.logger.info(`Fetching ${svgIds.length} SVGs from Figma API...`);
+      const svgContentMap = await figmaApi.getSvgs(svgIds);
 
       // Save each SVG
-      for (const nodeId of svgNodeIds) {
-        // Sanitize nodeId for filename (replace : with -)
-        const safeNodeId = nodeId.replace(/:/g, '-');
-        const filename = `${safeNodeId}.svg`;
+      for (const svgId of svgIds) {
+        // Use same filename format as React pipeline (svgIdToFile in ir.ts)
+        const filename = svgIdToFilename(svgId);
         const destPath = path.join(this.svgsDir, filename);
 
         // Skip if already exists
@@ -542,29 +533,28 @@ export class AssetDownloader {
           continue;
         }
 
-        const svgContent = svgContentMap.get(nodeId);
+        const svgContent = svgContentMap.get(svgId);
         if (!svgContent) {
-          this.logger.warn(`No content found for SVG node: ${nodeId}`);
+          this.logger.warn(`No content found for SVG: ${svgId}`);
           failed.push({ filename, url: '', error: 'No content returned from Figma API' });
           continue;
         }
 
         try {
-          this.logger.info(`Saving SVG: ${nodeId}`);
+          this.logger.info(`Saving SVG: ${svgId} -> ${filename}`);
           fs.writeFileSync(destPath, svgContent, 'utf8');
           success.push(filename);
         } catch (err) {
           const errorMsg = err instanceof Error ? err.message : String(err);
-          this.logger.error(`Failed to save ${nodeId}: ${errorMsg}`);
+          this.logger.error(`Failed to save ${svgId}: ${errorMsg}`);
           failed.push({ filename, url: '', error: errorMsg });
         }
       }
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
       this.logger.error(`Failed to fetch SVGs: ${errorMsg}`);
-      for (const nodeId of svgNodeIds) {
-        const safeNodeId = nodeId.replace(/:/g, '-');
-        const filename = `${safeNodeId}.svg`;
+      for (const svgId of svgIds) {
+        const filename = svgIdToFilename(svgId);
         if (!success.includes(filename)) {
           failed.push({ filename, url: '', error: errorMsg });
         }
