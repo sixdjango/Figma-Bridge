@@ -174,13 +174,36 @@ export function extractConsumedNodesFromHtml(
   const customComponents = doc.querySelectorAll('[data-component-type]');
 
   // Step 2: For each custom component, extract any consumed nodes from its children first
+  // Also check sibling elements that are logical children (node ID starts with component's node ID + ';')
+  // This handles cases where children become siblings (e.g., void elements, or rendering quirks)
   for (const component of customComponents) {
+    const componentNodeId = component.getAttribute('data-node-id');
+
     for (const nodeId of consumedNodeIds) {
+      if (extractedNodes.has(nodeId)) continue;
+
       // Check if this consumed node is inside this component
       const consumedElement = component.querySelector(`[data-node-id="${nodeId}"]`);
-      if (consumedElement && !extractedNodes.has(nodeId)) {
+      if (consumedElement) {
         // Extract the HTML before clearing children
         extractedNodes.set(nodeId, consumedElement.outerHTML);
+        continue;
+      }
+
+      // Also check sibling elements that are logical children
+      // (their node ID starts with the component's node ID followed by ';')
+      if (componentNodeId) {
+        const parentEl = component.parentNode;
+        if (parentEl) {
+          const prefix = componentNodeId + ';';
+          // Check if the consumed node ID starts with this component's node ID
+          if (nodeId.startsWith(prefix)) {
+            const siblingElement = parentEl.querySelector(`[data-node-id="${nodeId}"]`);
+            if (siblingElement) {
+              extractedNodes.set(nodeId, siblingElement.outerHTML);
+            }
+          }
+        }
       }
     }
   }
@@ -196,10 +219,37 @@ export function extractConsumedNodesFromHtml(
   }
 
   // Step 4: Clear all children from custom component nodes
+  // Also remove sibling elements that are logical children (node ID starts with component's node ID + ';')
+  // This handles cases where children become siblings (e.g., void elements like <input>, or rendering quirks)
   for (const component of customComponents) {
+    const componentNodeId = component.getAttribute('data-node-id');
+
     // Clear all children
     while (component.firstChild) {
       component.removeChild(component.firstChild);
+    }
+
+    // Also find and remove sibling elements that are logical children
+    // (their node ID starts with the component's node ID followed by ';')
+    if (componentNodeId) {
+      const parentEl = component.parentNode;
+      if (parentEl) {
+        const prefix = componentNodeId + ';';
+        // Collect siblings to remove (can't modify while iterating)
+        const siblingsToRemove: any[] = [];
+        for (const sibling of Array.from(parentEl.childNodes)) {
+          if (sibling === component) continue;
+          if ((sibling as any).nodeType !== 1) continue; // Skip non-element nodes
+          const siblingNodeId = (sibling as any).getAttribute?.('data-node-id');
+          if (siblingNodeId && siblingNodeId.startsWith(prefix)) {
+            siblingsToRemove.push(sibling);
+          }
+        }
+        // Remove collected siblings
+        for (const sibling of siblingsToRemove) {
+          parentEl.removeChild(sibling);
+        }
+      }
     }
   }
 
