@@ -124,10 +124,12 @@ async function buildReactComponent(
 
   // Extract consumed nodes from HTML (nodes used as component props)
   // These will be passed as JSX props instead of being in the main HTML tree
+  // Also clears children from all custom component nodes
   const rawHtml = mapped.htmlFragment || mapped.html;
-  const { html: htmlWithoutConsumed, extractedNodes } = ir.consumedNodeIds
-    ? extractConsumedNodesFromHtml(rawHtml, ir.consumedNodeIds)
-    : { html: rawHtml, extractedNodes: new Map<string, string>() };
+  const { html: htmlWithoutConsumed, extractedNodes } = extractConsumedNodesFromHtml(
+    rawHtml,
+    ir.consumedNodeIds || new Set<string>()
+  );
 
   const componentTags = buildComponentTagMap(components);
   const skipChildrenTags = new Set(componentTags.keys());
@@ -243,9 +245,11 @@ export async function figmaToReact(
   const fullCss = mapped.cssText;
 
   // Extract consumed nodes from HTML (nodes used as component props)
-  const { html: fullHtml, extractedNodes } = ir.consumedNodeIds
-    ? extractConsumedNodesFromHtml(rawFullHtml, ir.consumedNodeIds)
-    : { html: rawFullHtml, extractedNodes: new Map<string, string>() };
+  // Also clears children from all custom component nodes
+  const { html: fullHtml, extractedNodes } = extractConsumedNodesFromHtml(
+    rawFullHtml,
+    ir.consumedNodeIds || new Set<string>()
+  );
 
   // STEP 2: Split HTML by slice node IDs
   const splitResult = splitHtmlByNodeIds(fullHtml, sliceNodeIds, sliceNameMap);
