@@ -17,25 +17,18 @@ import http from 'http';
  */
 export interface FigmaApi {
   /**
-   * Get image URLs for given node IDs
-   * @param fileKey - Figma file key
-   * @param nodeIds - Array of node IDs to get images for
-   * @param options - Image export options
-   * @returns Map of nodeId to image URL
+   * Get SVG content for given node IDs
+   * @param ids - Array of node IDs to export as SVG
+   * @returns Map of nodeId to SVG content string
    */
-  getImageUrls(
-    fileKey: string,
-    nodeIds: string[],
-    options?: { format?: 'png' | 'jpg' | 'svg'; scale?: number }
-  ): Promise<Map<string, string>>;
+  getSvgs(ids: string[]): Promise<Map<string, string>>;
 
   /**
-   * Get image fill URLs for given image hashes
-   * @param fileKey - Figma file key
-   * @param imageHashes - Array of image hashes (imageId from fills)
-   * @returns Map of imageHash to image URL
+   * Get image data for given image IDs (from fills)
+   * @param ids - Array of image IDs (imageId from fills)
+   * @returns Map of imageId to base64 encoded image data
    */
-  getImageFillUrls(fileKey: string, imageHashes: string[]): Promise<Map<string, string>>;
+  getImages(ids: string[]): Promise<Map<string, string>>;
 }
 
 /**
@@ -429,50 +422,32 @@ export class AssetDownloader {
    * Download assets from Figma JSON using Figma API
    *
    * @param figmaJson - Figma composition JSON
-   * @param fileKey - Figma file key
    * @param figmaApi - Figma API instance (implement FigmaApi interface)
-   * @param options - Download options
    * @returns Download result with success and failed lists
    */
   async downloadFromFigmaJson(
     figmaJson: any,
-    fileKey: string,
-    figmaApi: FigmaApi,
-    options?: { scale?: number }
+    figmaApi: FigmaApi
   ): Promise<{ images: DownloadResult; svgs: DownloadResult }> {
     const extracted = extractAssetIds(figmaJson);
     this.logger.info(
       `Extracted ${extracted.imageIds.length} images and ${extracted.svgNodeIds.length} SVG nodes`
     );
 
-    const imageResult = await this.downloadImagesFromFigma(
-      extracted.imageIds,
-      fileKey,
-      figmaApi
-    );
-
-    const svgResult = await this.downloadSvgsFromFigma(
-      extracted.svgNodeIds,
-      fileKey,
-      figmaApi
-    );
+    const imageResult = await this.saveImagesFromFigma(extracted.imageIds, figmaApi);
+    const svgResult = await this.saveSvgsFromFigma(extracted.svgNodeIds, figmaApi);
 
     return { images: imageResult, svgs: svgResult };
   }
 
   /**
-   * Download image fills from Figma using API
+   * Save images from Figma API (base64 data)
    *
    * @param imageIds - Array of image fill IDs (imageId from fills)
-   * @param fileKey - Figma file key
    * @param figmaApi - Figma API instance
    * @returns Download result
    */
-  async downloadImagesFromFigma(
-    imageIds: string[],
-    fileKey: string,
-    figmaApi: FigmaApi
-  ): Promise<DownloadResult> {
+  async saveImagesFromFigma(imageIds: string[], figmaApi: FigmaApi): Promise<DownloadResult> {
     if (!imageIds.length) {
       return { success: [], failed: [] };
     }
@@ -482,11 +457,11 @@ export class AssetDownloader {
     const failed: DownloadResult['failed'] = [];
 
     try {
-      // Get URLs for all image fills
-      this.logger.info(`Fetching URLs for ${imageIds.length} image fills...`);
-      const urlMap = await figmaApi.getImageFillUrls(fileKey, imageIds);
+      // Get base64 data for all images
+      this.logger.info(`Fetching ${imageIds.length} images from Figma API...`);
+      const imageDataMap = await figmaApi.getImages(imageIds);
 
-      // Download each image
+      // Save each image
       for (const imageId of imageIds) {
         const filename = `${imageId}.png`;
         const destPath = path.join(this.imagesDir, filename);
@@ -498,26 +473,29 @@ export class AssetDownloader {
           continue;
         }
 
-        const url = urlMap.get(imageId);
-        if (!url) {
-          this.logger.warn(`No URL found for image: ${imageId}`);
-          failed.push({ filename, url: '', error: 'No URL returned from Figma API' });
+        const base64Data = imageDataMap.get(imageId);
+        if (!base64Data) {
+          this.logger.warn(`No data found for image: ${imageId}`);
+          failed.push({ filename, url: '', error: 'No data returned from Figma API' });
           continue;
         }
 
         try {
-          this.logger.info(`Downloading image: ${imageId}`);
-          await downloadFile(url, destPath, this.options.timeout);
+          this.logger.info(`Saving image: ${imageId}`);
+          // Remove data URL prefix if present (e.g., "data:image/png;base64,")
+          const base64Content = base64Data.replace(/^data:image\/\w+;base64,/, '');
+          const buffer = Buffer.from(base64Content, 'base64');
+          fs.writeFileSync(destPath, buffer);
           success.push(imageId);
         } catch (err) {
           const errorMsg = err instanceof Error ? err.message : String(err);
-          this.logger.error(`Failed to download ${imageId}: ${errorMsg}`);
-          failed.push({ filename, url, error: errorMsg });
+          this.logger.error(`Failed to save ${imageId}: ${errorMsg}`);
+          failed.push({ filename, url: '', error: errorMsg });
         }
       }
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
-      this.logger.error(`Failed to fetch image URLs: ${errorMsg}`);
+      this.logger.error(`Failed to fetch images: ${errorMsg}`);
       for (const imageId of imageIds) {
         if (!success.includes(imageId)) {
           failed.push({ filename: `${imageId}.png`, url: '', error: errorMsg });
@@ -525,23 +503,18 @@ export class AssetDownloader {
       }
     }
 
-    this.logger.info(`Images: ${success.length} downloaded, ${failed.length} failed`);
+    this.logger.info(`Images: ${success.length} saved, ${failed.length} failed`);
     return { success, failed };
   }
 
   /**
-   * Download SVGs from Figma using API
+   * Save SVGs from Figma API (SVG content)
    *
    * @param svgNodeIds - Array of node IDs to export as SVG
-   * @param fileKey - Figma file key
    * @param figmaApi - Figma API instance
    * @returns Download result
    */
-  async downloadSvgsFromFigma(
-    svgNodeIds: string[],
-    fileKey: string,
-    figmaApi: FigmaApi
-  ): Promise<DownloadResult> {
+  async saveSvgsFromFigma(svgNodeIds: string[], figmaApi: FigmaApi): Promise<DownloadResult> {
     if (!svgNodeIds.length) {
       return { success: [], failed: [] };
     }
@@ -551,11 +524,11 @@ export class AssetDownloader {
     const failed: DownloadResult['failed'] = [];
 
     try {
-      // Get SVG URLs for all nodes
-      this.logger.info(`Fetching URLs for ${svgNodeIds.length} SVG nodes...`);
-      const urlMap = await figmaApi.getImageUrls(fileKey, svgNodeIds, { format: 'svg' });
+      // Get SVG content for all nodes
+      this.logger.info(`Fetching ${svgNodeIds.length} SVGs from Figma API...`);
+      const svgContentMap = await figmaApi.getSvgs(svgNodeIds);
 
-      // Download each SVG
+      // Save each SVG
       for (const nodeId of svgNodeIds) {
         // Sanitize nodeId for filename (replace : with -)
         const safeNodeId = nodeId.replace(/:/g, '-');
@@ -569,26 +542,26 @@ export class AssetDownloader {
           continue;
         }
 
-        const url = urlMap.get(nodeId);
-        if (!url) {
-          this.logger.warn(`No URL found for SVG node: ${nodeId}`);
-          failed.push({ filename, url: '', error: 'No URL returned from Figma API' });
+        const svgContent = svgContentMap.get(nodeId);
+        if (!svgContent) {
+          this.logger.warn(`No content found for SVG node: ${nodeId}`);
+          failed.push({ filename, url: '', error: 'No content returned from Figma API' });
           continue;
         }
 
         try {
-          this.logger.info(`Downloading SVG: ${nodeId}`);
-          await downloadFile(url, destPath, this.options.timeout);
+          this.logger.info(`Saving SVG: ${nodeId}`);
+          fs.writeFileSync(destPath, svgContent, 'utf8');
           success.push(filename);
         } catch (err) {
           const errorMsg = err instanceof Error ? err.message : String(err);
-          this.logger.error(`Failed to download ${nodeId}: ${errorMsg}`);
-          failed.push({ filename, url, error: errorMsg });
+          this.logger.error(`Failed to save ${nodeId}: ${errorMsg}`);
+          failed.push({ filename, url: '', error: errorMsg });
         }
       }
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
-      this.logger.error(`Failed to fetch SVG URLs: ${errorMsg}`);
+      this.logger.error(`Failed to fetch SVGs: ${errorMsg}`);
       for (const nodeId of svgNodeIds) {
         const safeNodeId = nodeId.replace(/:/g, '-');
         const filename = `${safeNodeId}.svg`;
@@ -598,7 +571,7 @@ export class AssetDownloader {
       }
     }
 
-    this.logger.info(`SVGs: ${success.length} downloaded, ${failed.length} failed`);
+    this.logger.info(`SVGs: ${success.length} saved, ${failed.length} failed`);
     return { success, failed };
   }
 
@@ -649,36 +622,34 @@ export async function downloadSvgs(
  * Quick download function from Figma JSON
  *
  * @param figmaJson - Figma composition JSON
- * @param fileKey - Figma file key
  * @param figmaApi - Figma API instance (implement FigmaApi interface)
  * @param options - Downloader options
  * @returns Download results for images and SVGs
  *
  * @example
  * ```typescript
- * // Create a mock Figma API implementation
- * const mockFigmaApi: FigmaApi = {
- *   async getImageUrls(fileKey, nodeIds, options) {
- *     // Call Figma REST API: GET /v1/images/:file_key?ids=:nodeIds&format=svg
- *     return new Map([['1:23', 'https://...']]);
+ * // Create a Figma API implementation
+ * const figmaApi: FigmaApi = {
+ *   async getSvgs(ids) {
+ *     // Fetch SVG content from Figma
+ *     return new Map([['1:23', '<svg>...</svg>']]);
  *   },
- *   async getImageFillUrls(fileKey, imageHashes) {
- *     // Call Figma REST API: GET /v1/files/:file_key/images
- *     return new Map([['abc123', 'https://...']]);
+ *   async getImages(ids) {
+ *     // Fetch image data as base64 from Figma
+ *     return new Map([['abc123', 'data:image/png;base64,...']]);
  *   },
  * };
  *
- * const result = await downloadFromFigmaJson(figmaJson, 'file-key', mockFigmaApi);
- * console.log(result.images.success); // Downloaded image IDs
- * console.log(result.svgs.success);   // Downloaded SVG filenames
+ * const result = await downloadFromFigmaJson(figmaJson, figmaApi);
+ * console.log(result.images.success); // Saved image IDs
+ * console.log(result.svgs.success);   // Saved SVG filenames
  * ```
  */
 export async function downloadFromFigmaJson(
   figmaJson: any,
-  fileKey: string,
   figmaApi: FigmaApi,
   options?: AssetDownloaderOptions
 ): Promise<{ images: DownloadResult; svgs: DownloadResult }> {
   const downloader = new AssetDownloader(options);
-  return downloader.downloadFromFigmaJson(figmaJson, fileKey, figmaApi);
+  return downloader.downloadFromFigmaJson(figmaJson, figmaApi);
 }
