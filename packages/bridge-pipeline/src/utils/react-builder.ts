@@ -30,6 +30,10 @@ export type ComponentPropDef = {
   props?: Record<string, any>;
   fromLib?: string;
   importWay?: 'DEFAULT' | 'NAMED' | string;
+  /** Mark as component when no nodeId is provided */
+  isComponent?: boolean;
+  /** Children to render inside the component */
+  children?: ComponentPropDef | ComponentPropDef[] | string;
 };
 
 /**
@@ -573,10 +577,32 @@ function parseComponentProp(value: string): ComponentPropDef | null {
  * If extractedNodes contains pre-rendered HTML for this node, convert that HTML to JSX
  * Otherwise, build JSX from the component definition
  */
+/**
+ * Render children to JSX string
+ */
+function renderChildrenToJsx(
+  children: ComponentPropDef | ComponentPropDef[] | string | undefined,
+  options: ReactifyOptions
+): string {
+  if (!children) return '';
+  if (typeof children === 'string') return children;
+  if (Array.isArray(children)) {
+    return children.map((c) => componentPropToJsx(c, options)).join('\n');
+  }
+  return componentPropToJsx(children, options);
+}
+
+/**
+ * Check if a value looks like a component definition
+ */
+function isComponentDef(val: any): val is ComponentPropDef {
+  return val && typeof val === 'object' && typeof val.type === 'string' && (val.isComponent || val.nodeId || val.fromLib);
+}
+
 function componentPropToJsx(comp: ComponentPropDef, options: ReactifyOptions): string {
   const componentName = comp.type;
 
-  // Register component import
+  // Register component import only if fromLib is provided
   if (comp.fromLib && options.componentImports) {
     const importKey = `${comp.fromLib}:${componentName}`;
     if (!options.componentImports.has(importKey)) {
@@ -588,6 +614,23 @@ function componentPropToJsx(comp: ComponentPropDef, options: ReactifyOptions): s
     }
   }
 
+  // Collect children from both comp.children and comp.props.children
+  let childrenSource: ComponentPropDef | ComponentPropDef[] | string | undefined = comp.children;
+  if (!childrenSource && comp.props?.children) {
+    const propsChildren = comp.props.children;
+    // Check if props.children is component(s)
+    if (Array.isArray(propsChildren) && propsChildren.length > 0 && isComponentDef(propsChildren[0])) {
+      childrenSource = propsChildren as ComponentPropDef[];
+    } else if (isComponentDef(propsChildren)) {
+      childrenSource = propsChildren as ComponentPropDef;
+    } else if (typeof propsChildren === 'string') {
+      childrenSource = propsChildren;
+    }
+  }
+
+  // Render children if provided
+  const childrenJsx = renderChildrenToJsx(childrenSource, options);
+
   // If we have pre-rendered HTML for this node, convert it to JSX
   if (comp.nodeId && options.extractedNodes) {
     const extractedHtml = options.extractedNodes.get(comp.nodeId);
@@ -596,7 +639,7 @@ function componentPropToJsx(comp: ComponentPropDef, options: ReactifyOptions): s
       const roots = getRoots(extractedHtml);
       const rootEl = roots.find((n: any) => n.nodeType === 1);
       if (rootEl && (rootEl as any).tagName) {
-        // Add component lib attributes to the element
+        // Add component lib attributes to the element only if fromLib is provided
         if (comp.fromLib) {
           (rootEl as any).setAttribute('data-component-lib', comp.fromLib);
           (rootEl as any).setAttribute('data-import-way', comp.importWay || 'NAMED');
@@ -611,6 +654,8 @@ function componentPropToJsx(comp: ComponentPropDef, options: ReactifyOptions): s
         // Merge component props into the element (component props take precedence)
         if (comp.props && typeof comp.props === 'object') {
           for (const [key, val] of Object.entries(comp.props)) {
+            // Skip children - handled separately as JSX children
+            if (key === 'children') continue;
             if (key === 'style' && val && typeof val === 'object') {
               // Merge styles: parse existing style, merge with component props style (higher priority)
               const existingStyle = (rootEl as any).getAttribute('style') || '';
@@ -647,21 +692,50 @@ function componentPropToJsx(comp: ComponentPropDef, options: ReactifyOptions): s
         let jsx = nodeToJsx(rootEl, 0, options).trim();
         // Replace the original tag name with the component name
         const originalTag = (rootEl as any).tagName.toLowerCase();
-        // Replace opening tag: <div ... -> <ComponentName ...
-        jsx = jsx.replace(new RegExp(`^<${originalTag}(\\s|>|\\/)`, 'i'), `<${componentName}$1`);
-        // Replace closing tag: </div> -> </ComponentName>
-        jsx = jsx.replace(new RegExp(`</${originalTag}>$`, 'i'), `</${componentName}>`);
-        // Replace self-closing: <div .../> -> <ComponentName .../>
-        jsx = jsx.replace(new RegExp(`<${originalTag}([^>]*?)\\s*/>$`, 'i'), `<${componentName}$1 />`);
+
+        // Find the position of the closing tag or self-closing
+        // We need to handle JSX expressions in attributes that may contain '>'
+        const selfClosingMatch = jsx.match(new RegExp(`^(<${originalTag}[\\s\\S]*?)\\s*/>$`, 'i'));
+        const emptyTagMatch = jsx.match(new RegExp(`^(<${originalTag}[\\s\\S]*?>)\\s*</${originalTag}>$`, 'i'));
+
+        if (selfClosingMatch) {
+          // Self-closing tag: <div ... /> -> <ComponentName ...>children</ComponentName> or <ComponentName ... />
+          const openingPart = selfClosingMatch[1].replace(new RegExp(`^<${originalTag}`, 'i'), `<${componentName}`);
+          if (childrenJsx) {
+            jsx = `${openingPart}>${childrenJsx}</${componentName}>`;
+          } else {
+            jsx = `${openingPart} />`;
+          }
+        } else if (emptyTagMatch) {
+          // Empty non-self-closing tag: <div ...></div> -> <ComponentName ...>children</ComponentName>
+          const openingPart = emptyTagMatch[1].replace(new RegExp(`^<${originalTag}`, 'i'), `<${componentName}`);
+          if (childrenJsx) {
+            jsx = `${openingPart}${childrenJsx}</${componentName}>`;
+          } else {
+            jsx = `${openingPart}</${componentName}>`;
+          }
+        } else {
+          // Has existing children - just replace tag names
+          jsx = jsx.replace(new RegExp(`^<${originalTag}`, 'i'), `<${componentName}`);
+          jsx = jsx.replace(new RegExp(`</${originalTag}>$`, 'i'), `</${componentName}>`);
+          // If we have additional children to add, insert before closing tag
+          if (childrenJsx) {
+            jsx = jsx.replace(new RegExp(`</${componentName}>$`), `${childrenJsx}</${componentName}>`);
+          }
+        }
+
         return jsx;
       }
     }
   }
 
   // Fallback: Build props string from component definition
+  // This handles both isComponent=true without nodeId, and legacy cases
   const propParts: string[] = [];
   if (comp.props && typeof comp.props === 'object') {
     for (const [key, val] of Object.entries(comp.props)) {
+      // Skip children - handled separately as JSX children
+      if (key === 'children') continue;
       if (key === 'style' && val && typeof val === 'object') {
         // Convert style object to JSX style
         const styleEntries = Object.entries(val).map(([k, v]) => {
@@ -683,10 +757,16 @@ function componentPropToJsx(comp: ComponentPropDef, options: ReactifyOptions): s
 
   const propsStr = propParts.length ? ' ' + propParts.join(' ') : '';
 
-  // Include data-component-lib and data-import-way for jsx-parser to extract imports
+  // Include data-component-lib and data-import-way for jsx-parser only if fromLib is provided
   const dataAttrs = comp.fromLib
     ? ` data-component-lib="${comp.fromLib}" data-import-way="${comp.importWay || 'NAMED'}"`
     : '';
+
+  // If has children, render as open/close tags
+  if (childrenJsx) {
+    return `<${componentName}${dataAttrs}${propsStr}>${childrenJsx}</${componentName}>`;
+  }
+
   return `<${componentName}${dataAttrs}${propsStr} />`;
 }
 
@@ -735,6 +815,9 @@ function nodeToJsx(node: any, depth: number, options: ReactifyOptions): string {
     // Skip data-component-type (internal use only), keep data-node-id for debugging
     if (attrLower === 'data-component-type') continue;
 
+    // Skip children attribute - handled as JSX children, not as a prop
+    if (attrLower === 'children') continue;
+
     // Handle component prop attributes (data-component-prop-*)
     if (attrLower.startsWith('data-component-prop-')) {
       const propName = attr.slice('data-component-prop-'.length);
@@ -766,12 +849,42 @@ function nodeToJsx(node: any, depth: number, options: ReactifyOptions): string {
     }
   }
   const attrStr = attrParts.length ? ' ' + attrParts.join(' ') : '';
-  const children = skipChildren
+
+  // Collect children from DOM nodes
+  const domChildren = skipChildren
     ? []
     : Array.from(node.childNodes || [])
         .map((ch: any) => nodeToJsx(ch, depth + (options.indent || 2), options))
         .filter(Boolean);
-  const childStr = children.join('\n');
+
+  // Check for component children defined in the 'children' attribute
+  let componentChildrenJsx = '';
+  const childrenAttr = node.getAttribute('children');
+  if (childrenAttr) {
+    try {
+      const parsed = JSON.parse(childrenAttr);
+      if (Array.isArray(parsed)) {
+        // Array of component definitions
+        const childJsxParts = parsed
+          .filter((c: any) => c && typeof c === 'object' && typeof c.type === 'string')
+          .map((c: any) => componentPropToJsx(c as ComponentPropDef, options));
+        componentChildrenJsx = childJsxParts.join('\n');
+      } else if (parsed && typeof parsed === 'object' && typeof parsed.type === 'string') {
+        // Single component definition
+        componentChildrenJsx = componentPropToJsx(parsed as ComponentPropDef, options);
+      }
+    } catch {
+      // Not valid JSON, treat as string children
+      componentChildrenJsx = childrenAttr;
+    }
+  }
+
+  // Combine DOM children and component children
+  const allChildren = [...domChildren];
+  if (componentChildrenJsx) {
+    allChildren.push(componentChildrenJsx);
+  }
+  const childStr = allChildren.join('\n');
 
   if (!childStr) {
     const voidish = VOID_ELEMENTS.has(tagName.toLowerCase()) || isSvgComponent;
