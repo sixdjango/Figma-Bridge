@@ -20,12 +20,35 @@ function collectConsumedNodeIds(props: Record<string, any> | undefined, result: 
   if (!props || typeof props !== 'object') return;
   for (const value of Object.values(props)) {
     if (value && typeof value === 'object') {
+      // Handle arrays (like children array)
+      if (Array.isArray(value)) {
+        for (const item of value) {
+          if (item && typeof item === 'object') {
+            if (typeof item.nodeId === 'string' && item.nodeId) {
+              result.add(item.nodeId);
+            }
+            // Recursively check nested props in array items
+            if (item.props) {
+              collectConsumedNodeIds(item.props, result);
+            }
+            // Recursively check children in array items
+            if (item.children) {
+              collectConsumedNodeIds({ children: item.children }, result);
+            }
+          }
+        }
+        continue;
+      }
       // Check if this is a component prop with a nodeId
       if (typeof value.nodeId === 'string' && value.nodeId) {
         result.add(value.nodeId);
         // Recursively check nested props
         if (value.props) {
           collectConsumedNodeIds(value.props, result);
+        }
+        // Recursively check children
+        if (value.children) {
+          collectConsumedNodeIds({ children: value.children }, result);
         }
       }
     }

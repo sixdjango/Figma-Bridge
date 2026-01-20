@@ -23,13 +23,14 @@ import type {
   FigmaToReactResult,
   Logger,
 } from './types';
-import { ensureDir, cleanDir, defaultLogger } from './utils';
+import { ensureDir, cleanDir, defaultLogger, buildImportName } from './utils';
 import { writeComponent, generateBarrelExport } from './component-builder';
 import {
   copyAssets,
   buildAssetIndexEntries,
   writeAssetsIndex,
   createAssetUrlProvider,
+  saveBase64Images,
 } from './asset-handler';
 
 // Re-export types and utilities for external use
@@ -95,6 +96,14 @@ export async function generateViteComponents(
   ensureDir(assetsDir);
   logger.info(`Output directory: ${outputDir}`);
 
+  // Extract and save base64 images from component definitions
+  const layoutData = (inputData as any)?.layout;
+  const components = Array.isArray(layoutData?.components) ? layoutData.components : [];
+  const savedBase64Images = saveBase64Images(components, assetsDir, logger);
+  if (savedBase64Images.length > 0) {
+    logger.info(`Saved ${savedBase64Images.length} base64 images from components`);
+  }
+
   // Generate React components
   logger.info('Generating React components...');
 
@@ -115,10 +124,16 @@ export async function generateViteComponents(
     tempSvgsDir,
   });
 
+  // Merge base64 saved images with copied images
+  const allCopiedImages = [
+    ...copyResult.copiedImages,
+    ...savedBase64Images.map(img => img.imageId),
+  ];
+
   // Write assets index (only for files that actually exist)
   const assetEntries = buildAssetIndexEntries({
     result,
-    existingImages: copyResult.copiedImages,
+    existingImages: allCopiedImages,
     existingSvgs: copyResult.copiedSvgs,
   });
   writeAssetsIndex(assetsDir, assetEntries);

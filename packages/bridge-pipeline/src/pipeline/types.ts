@@ -66,6 +66,10 @@ export type CustomComponentDef = {
   props?: Record<string, any>;
   fromLib?: string;
   importWay?: CustomComponentImportWay;
+  /** Image ID for Image components - used to generate proper import references */
+  imageId?: string;
+  /** Base64 image content - saved to assets during generation */
+  imageContent?: string;
 };
 
 export type RenderNodeIR = {

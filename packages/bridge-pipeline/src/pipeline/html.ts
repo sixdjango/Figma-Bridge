@@ -177,14 +177,20 @@ function styleObjectToCssString(style: Record<string, any>): string {
 
 /**
  * Check if a value is a component prop definition
- * Component props have: type (string), optionally fromLib, importWay
+ * Component props can be:
+ * 1. Full definition: { type: string, fromLib?, importWay? }
+ * 2. Node reference: { nodeId: string, isComponent: true }
  */
 function isComponentProp(value: any): value is CustomComponentDef {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  // Must have 'type' as string (component name)
+  // Case 1: Node reference with nodeId and isComponent flag
+  if (typeof value.nodeId === 'string' && value.isComponent === true) {
+    return true;
+  }
+  // Case 2: Full component definition with type
   if (typeof value.type !== 'string' || !value.type.trim()) return false;
   // Should have either fromLib or importWay to distinguish from regular objects
-  return typeof value.fromLib === 'string' || typeof value.importWay === 'string';
+  return typeof value.fromLib === 'string' || typeof value.importWay === 'string' || value.isComponent === true;
 }
 
 /**
@@ -208,6 +214,10 @@ function buildCustomComponentAttrs(def?: CustomComponentDef): { tagName?: string
   if (def.componentType) attrs['data-component-type'] = String(def.componentType);
   if (def.fromLib) attrs['data-component-lib'] = String(def.fromLib);
   if (def.importWay) attrs['data-import-way'] = String(def.importWay);
+  // Store original component name for JSX conversion (handles names with dots like List.Item)
+  attrs['data-component-name'] = String(def.type);
+  // Pass imageId for Image components - used to generate import references for src
+  if (def.imageId) attrs['data-image-id'] = String(def.imageId);
   if (def.props && typeof def.props === 'object') {
     for (const [k, v] of Object.entries(def.props)) {
       if (!k) continue;

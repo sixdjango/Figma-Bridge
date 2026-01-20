@@ -23,14 +23,22 @@ export type ComponentImport = {
 
 /**
  * Parsed component prop definition
+ * Can be either:
+ * 1. Full definition: { type: "ComponentName", fromLib?: ..., props?: ... }
+ * 2. Node reference: { nodeId: "xxx", isComponent: true } - rendered from extractedNodes
  */
 export type ComponentPropDef = {
-  type: string;
+  /** Component type/name - optional for nodeId references */
+  type?: string;
+  /** Node ID for referencing rendered Figma nodes */
   nodeId?: string;
+  /** Props to pass to the component */
   props?: Record<string, any>;
+  /** Library to import from */
   fromLib?: string;
+  /** Import method */
   importWay?: 'DEFAULT' | 'NAMED' | string;
-  /** Mark as component when no nodeId is provided */
+  /** Mark as component reference */
   isComponent?: boolean;
   /** Children to render inside the component */
   children?: ComponentPropDef | ComponentPropDef[] | string;
@@ -563,7 +571,9 @@ function parseComponentProp(value: string): ComponentPropDef | null {
     // Decode base64 to JSON string
     const json = Buffer.from(base64, 'base64').toString('utf8');
     const parsed = JSON.parse(json);
-    if (typeof parsed?.type === 'string') {
+    // Accept full definition (with type) or nodeId reference (with nodeId and isComponent)
+    if (typeof parsed?.type === 'string' ||
+        (typeof parsed?.nodeId === 'string' && parsed?.isComponent === true)) {
       return parsed as ComponentPropDef;
     }
   } catch {
@@ -594,16 +604,38 @@ function renderChildrenToJsx(
 
 /**
  * Check if a value looks like a component definition
+ * Supports both full definitions ({ type, fromLib, ... }) and nodeId references ({ nodeId, isComponent: true })
  */
 function isComponentDef(val: any): val is ComponentPropDef {
-  return val && typeof val === 'object' && typeof val.type === 'string' && (val.isComponent || val.nodeId || val.fromLib);
+  if (!val || typeof val !== 'object') return false;
+  // Case 1: Node reference with nodeId and isComponent flag
+  if (typeof val.nodeId === 'string' && val.isComponent === true) return true;
+  // Case 2: Full component definition with type
+  return typeof val.type === 'string' && (val.isComponent || val.nodeId || val.fromLib);
 }
 
 function componentPropToJsx(comp: ComponentPropDef, options: ReactifyOptions): string {
   const componentName = comp.type;
 
+  // Case: nodeId reference without type - just render the extracted HTML as-is
+  // This handles { nodeId: "xxx", isComponent: true } format
+  if (!componentName && comp.nodeId && options.extractedNodes) {
+    const extractedHtml = options.extractedNodes.get(comp.nodeId);
+    if (extractedHtml) {
+      // Parse the extracted HTML fragment and convert to JSX
+      const roots = getRoots(extractedHtml);
+      const rootEl = roots.find((n: any) => n.nodeType === 1);
+      if (rootEl) {
+        // Convert to JSX, keeping the original structure
+        return nodeToJsx(rootEl, 0, options).trim();
+      }
+    }
+    // Fallback: render a comment indicating the missing node
+    return `{/* Missing node: ${comp.nodeId} */}`;
+  }
+
   // Register component import only if fromLib is provided
-  if (comp.fromLib && options.componentImports) {
+  if (comp.fromLib && componentName && options.componentImports) {
     const importKey = `${comp.fromLib}:${componentName}`;
     if (!options.componentImports.has(importKey)) {
       options.componentImports.set(importKey, {
@@ -782,7 +814,9 @@ function nodeToJsx(node: any, depth: number, options: ReactifyOptions): string {
   const rawTag = (node.localName || node.tagName || '').toString();
   const tagKey = rawTag.toLowerCase();
   const tagLookup = options.componentTags?.get(tagKey);
-  let tagName = tagLookup || rawTag;
+  // Use data-component-name if available (preserves names with dots like List.Item)
+  const componentName = node.getAttribute('data-component-name');
+  let tagName = componentName || tagLookup || rawTag;
   const skipChildren = options.skipChildrenTags?.has(tagKey) || false;
   const isImgTag = tagKey === 'img';
   const srcAttr = isImgTag ? (node.getAttribute('src') ?? '') : '';
@@ -807,13 +841,31 @@ function nodeToJsx(node: any, depth: number, options: ReactifyOptions): string {
     }
   }
 
+  // Check for image-id attribute (for Image components with imageId)
+  const imageId = node.getAttribute('data-image-id');
+  let imageAssetImport: AssetImport | null = null;
+  if (imageId && options.assetImports && options.assetImportMode?.image !== 'none') {
+    // Create or get asset import for this image
+    const importPath = `../assets/${imageId}.png`;
+    imageAssetImport = options.assetImports.get(importPath) ?? null;
+    if (!imageAssetImport) {
+      const usedNames = new Set(Array.from(options.assetImports.values()).map((v) => v.localName));
+      const localName = ensureUniqueName(buildImportName(imageId, 'Img'), usedNames);
+      imageAssetImport = { kind: 'image', localName, importPath, useComponent: false };
+      options.assetImports.set(importPath, imageAssetImport);
+    }
+    if (options.assetImportRefs) options.assetImportRefs.add(imageAssetImport);
+  }
+
   const attrParts: string[] = [];
   for (const attr of node.getAttributeNames()) {
     const attrLower = attr.toLowerCase();
     if (isSvgComponent && (attrLower === 'src' || attrLower === 'alt')) continue;
 
-    // Skip data-component-type (internal use only), keep data-node-id for debugging
+    // Skip internal data attributes
     if (attrLower === 'data-component-type') continue;
+    if (attrLower === 'data-component-name') continue;
+    if (attrLower === 'data-image-id') continue;
 
     // Skip children attribute - handled as JSX children, not as a prop
     if (attrLower === 'children') continue;
@@ -835,8 +887,18 @@ function nodeToJsx(node: any, depth: number, options: ReactifyOptions): string {
     else if (attrLower === 'for') name = 'htmlFor';
     else if (attrLower === 'onclick') name = 'onClick';
     const val = node.getAttribute(attr) ?? '';
-    if (assetImport && !assetImport.useComponent && attrLower === 'src') {
-      attrParts.push(`src={${assetImport.localName}}`);
+
+    // Handle src attribute - use image import reference if available
+    if (attrLower === 'src') {
+      if (imageAssetImport) {
+        // For Image components with imageId, use the image asset import
+        attrParts.push(`src={${imageAssetImport.localName}}`);
+      } else if (assetImport && !assetImport.useComponent) {
+        // For regular img tags with asset imports
+        attrParts.push(`src={${assetImport.localName}}`);
+      } else {
+        attrParts.push(`${name}=${JSON.stringify(val)}`);
+      }
     } else if (attrLower === 'style') {
       attrParts.push(`style={${styleToObjectLiteral(val, {
         pxToRem: options.pxToRem,
@@ -864,13 +926,13 @@ function nodeToJsx(node: any, depth: number, options: ReactifyOptions): string {
     try {
       const parsed = JSON.parse(childrenAttr);
       if (Array.isArray(parsed)) {
-        // Array of component definitions
+        // Array of component definitions (including nodeId references)
         const childJsxParts = parsed
-          .filter((c: any) => c && typeof c === 'object' && typeof c.type === 'string')
+          .filter((c: any) => isComponentDef(c))
           .map((c: any) => componentPropToJsx(c as ComponentPropDef, options));
         componentChildrenJsx = childJsxParts.join('\n');
-      } else if (parsed && typeof parsed === 'object' && typeof parsed.type === 'string') {
-        // Single component definition
+      } else if (isComponentDef(parsed)) {
+        // Single component definition (including nodeId reference)
         componentChildrenJsx = componentPropToJsx(parsed as ComponentPropDef, options);
       }
     } catch {

@@ -4,7 +4,7 @@
 
 import fs from 'fs';
 import path from 'path';
-import type { FigmaToReactResult, AssetIndexEntry } from './types';
+import type { FigmaToReactResult, AssetIndexEntry, Logger } from './types';
 import {
   ensureDir,
   copyFileIfNeeded,
@@ -13,6 +13,7 @@ import {
   buildImportName,
   ensureUniqueName,
   toAssetIndexPath,
+  defaultLogger,
 } from './utils';
 
 /**
@@ -206,4 +207,81 @@ export function createAssetUrlProvider(options: AssetUrlProviderOptions) {
     }
     return id;
   };
+}
+
+/**
+ * Component definition with potential image content
+ */
+interface ComponentWithImage {
+  nodeId?: string;
+  type?: string;
+  imageId?: string;
+  imageContent?: string;
+  props?: Record<string, any>;
+}
+
+/**
+ * Result of saving base64 images
+ */
+export interface SavedBase64Image {
+  imageId: string;
+  filePath: string;
+}
+
+/**
+ * Extract and save base64 images from component definitions
+ * This handles Image components that have imageContent (base64 data)
+ *
+ * @param components - Array of component definitions
+ * @param assetsDir - Directory to save images to
+ * @param logger - Optional logger
+ * @returns Array of saved image info
+ */
+export function saveBase64Images(
+  components: ComponentWithImage[],
+  assetsDir: string,
+  logger: Logger = defaultLogger
+): SavedBase64Image[] {
+  if (!Array.isArray(components)) return [];
+
+  ensureDir(assetsDir);
+  const saved: SavedBase64Image[] = [];
+
+  for (const comp of components) {
+    if (!comp || typeof comp !== 'object') continue;
+
+    // Check if component has imageId and imageContent
+    if (typeof comp.imageId === 'string' && typeof comp.imageContent === 'string') {
+      const imageId = comp.imageId;
+      const base64Data = comp.imageContent;
+
+      // Determine file extension (default to png)
+      let ext = 'png';
+      let base64Clean = base64Data;
+
+      // Handle data URL format: data:image/png;base64,xxxxx
+      if (base64Data.startsWith('data:')) {
+        const match = base64Data.match(/^data:image\/(\w+);base64,(.+)$/);
+        if (match) {
+          ext = match[1] === 'jpeg' ? 'jpg' : match[1];
+          base64Clean = match[2];
+        }
+      }
+
+      const fileName = `${imageId}.${ext}`;
+      const filePath = path.join(assetsDir, fileName);
+
+      try {
+        // Decode base64 and write to file
+        const buffer = Buffer.from(base64Clean, 'base64');
+        fs.writeFileSync(filePath, buffer);
+        saved.push({ imageId, filePath });
+        logger.info(`Saved base64 image: ${fileName}`);
+      } catch (err) {
+        logger.warn(`Failed to save base64 image ${imageId}: ${err}`);
+      }
+    }
+  }
+
+  return saved;
 }
