@@ -498,6 +498,35 @@ function escText(text: string): string {
   return `{${JSON.stringify(text)}}`;
 }
 
+/**
+ * Format an attribute value for JSX output
+ * Detects numbers and booleans and renders them as JSX expressions
+ * @param name - Attribute name
+ * @param val - Attribute value (as string from HTML)
+ * @returns JSX attribute string (e.g., 'step={8}' or 'disabled={false}' or 'title="hello"')
+ */
+function formatJsxAttr(name: string, val: string): string {
+  // Check for boolean values
+  if (val === 'true') {
+    return `${name}={true}`;
+  }
+  if (val === 'false') {
+    return `${name}={false}`;
+  }
+
+  // Check for numeric values (integers and floats, including negative)
+  // Must be a valid number and not empty
+  if (val !== '' && /^-?\d+(\.\d+)?$/.test(val)) {
+    const num = parseFloat(val);
+    if (!isNaN(num) && isFinite(num)) {
+      return `${name}={${val}}`;
+    }
+  }
+
+  // Default: string value
+  return `${name}=${JSON.stringify(val)}`;
+}
+
 function buildImportName(base: string, prefix: string): string {
   const pascal = toPascalCase(base) || 'Asset';
   const name = `${prefix}${pascal}`;
@@ -935,7 +964,7 @@ function nodeToJsx(node: any, depth: number, options: ReactifyOptions): string {
         // For regular img tags with asset imports
         attrParts.push(`src={${assetImport.localName}}`);
       } else {
-        attrParts.push(`${name}=${JSON.stringify(val)}`);
+        attrParts.push(formatJsxAttr(name, val));
       }
     } else if (attrLower === 'style') {
       attrParts.push(`style={${styleToObjectLiteral(val, {
@@ -945,7 +974,7 @@ function nodeToJsx(node: any, depth: number, options: ReactifyOptions): string {
         assetImportRefs: options.assetImportRefs,
       })}}`);
     } else {
-      attrParts.push(`${name}=${JSON.stringify(val)}`);
+      attrParts.push(formatJsxAttr(name, val));
     }
   }
   const attrStr = attrParts.length ? ' ' + attrParts.join(' ') : '';

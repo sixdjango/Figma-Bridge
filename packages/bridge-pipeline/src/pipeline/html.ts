@@ -239,11 +239,81 @@ function buildCustomComponentAttrs(def?: CustomComponentDef): { tagName?: string
   return { tagName: def.type, attrs };
 }
 
+/**
+ * Filter out ignored classes from a className string
+ */
+function filterIgnoredClasses(className: string, ignoreClass?: string[]): string {
+  if (!ignoreClass || ignoreClass.length === 0) return className;
+  const ignoreSet = new Set(ignoreClass);
+  return className
+    .split(/\s+/)
+    .filter(cls => cls && !ignoreSet.has(cls))
+    .join(' ');
+}
+
+/**
+ * Filter out ignored styles from a CSS string
+ * Handles both kebab-case (background-color) and matches property names
+ */
+function filterIgnoredStyles(css: string, ignoreStyle?: string[]): string {
+  if (!ignoreStyle || ignoreStyle.length === 0 || !css) return css;
+
+  // Normalize ignore list to handle both camelCase and kebab-case
+  const ignoreSet = new Set<string>();
+  for (const style of ignoreStyle) {
+    // Add the original
+    ignoreSet.add(style.toLowerCase());
+    // Add kebab-case version
+    const kebab = style.replace(/([A-Z])/g, '-$1').toLowerCase();
+    ignoreSet.add(kebab);
+    // Add camelCase version
+    const camel = style.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+    ignoreSet.add(camel.toLowerCase());
+  }
+
+  // Parse CSS and filter out ignored properties
+  const entries = css.split(';').filter(Boolean);
+  const filtered: string[] = [];
+
+  for (const entry of entries) {
+    const colonIdx = entry.indexOf(':');
+    if (colonIdx <= 0) {
+      filtered.push(entry);
+      continue;
+    }
+    const prop = entry.slice(0, colonIdx).trim().toLowerCase();
+    // Check if the property or any prefix matches the ignore list
+    // e.g., "background" should match "background-color", "background-image", etc.
+    let shouldIgnore = false;
+    for (const ignore of ignoreSet) {
+      if (prop === ignore || prop.startsWith(ignore + '-')) {
+        shouldIgnore = true;
+        break;
+      }
+    }
+    if (!shouldIgnore) {
+      filtered.push(entry);
+    }
+  }
+
+  return filtered.join(';') + (filtered.length > 0 ? ';' : '');
+}
+
 function applyCustomComponent(cfg: RenderBoxConfig, def?: CustomComponentDef): void {
   const { tagName, attrs } = buildCustomComponentAttrs(def);
   if (tagName) cfg.tagName = tagName;
   if (attrs && Object.keys(attrs).length > 0) {
     cfg.customAttributes = cfg.customAttributes ? { ...cfg.customAttributes, ...attrs } : attrs;
+  }
+
+  // Apply ignoreClass filter
+  if (def?.ignoreClass && def.ignoreClass.length > 0) {
+    cfg.className = filterIgnoredClasses(cfg.className, def.ignoreClass);
+  }
+
+  // Apply ignoreStyle filter
+  if (def?.ignoreStyle && def.ignoreStyle.length > 0) {
+    cfg.boxCss = filterIgnoredStyles(cfg.boxCss, def.ignoreStyle);
   }
 }
 

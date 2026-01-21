@@ -38,7 +38,7 @@ async function main() {
       includeCssImport: false,
       // Remove debug data attributes (data-node-id, etc.) in production
       // Set to true to keep them for debugging
-      debug: true,
+      debug: false,
       // Format output code
       formatOutput: true,
       logger: {

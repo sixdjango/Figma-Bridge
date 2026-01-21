@@ -70,6 +70,10 @@ export type CustomComponentDef = {
   imageId?: string;
   /** Base64 image content - saved to assets during generation */
   imageContent?: string;
+  /** Classes to ignore/remove when rendering the component */
+  ignoreClass?: string[];
+  /** Styles to ignore/remove when rendering the component */
+  ignoreStyle?: string[];
 };
 
 export type RenderNodeIR = {
