@@ -617,7 +617,7 @@ function isComponentDef(val: any): val is ComponentPropDef {
 function componentPropToJsx(comp: ComponentPropDef, options: ReactifyOptions): string {
   const componentName = comp.type;
 
-  // Case: nodeId reference without type - just render the extracted HTML as-is
+  // Case: nodeId reference without type - render the extracted HTML as the component
   // This handles { nodeId: "xxx", isComponent: true } format
   if (!componentName && comp.nodeId && options.extractedNodes) {
     const extractedHtml = options.extractedNodes.get(comp.nodeId);
@@ -626,7 +626,12 @@ function componentPropToJsx(comp: ComponentPropDef, options: ReactifyOptions): s
       const roots = getRoots(extractedHtml);
       const rootEl = roots.find((n: any) => n.nodeType === 1);
       if (rootEl) {
-        // Convert to JSX, keeping the original structure
+        // Clear children - component props should not have Figma-rendered children
+        // The component will render its own content based on props
+        while ((rootEl as any).firstChild) {
+          (rootEl as any).removeChild((rootEl as any).firstChild);
+        }
+        // Convert to JSX
         return nodeToJsx(rootEl, 0, options).trim();
       }
     }

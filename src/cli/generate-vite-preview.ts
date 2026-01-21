@@ -21,7 +21,7 @@ import path from 'path';
 import { generateViteComponents } from '../generate/vite';
 
 // Configuration
-const MOCK_FILE = path.join(process.cwd(), 'examples/mock/component_image_composition.json');
+const MOCK_FILE = path.join(process.cwd(), 'examples/mock/component_demo_composition.json');
 const OUTPUT_DIR = path.join(process.cwd(), 'examples/vite/src/generated');
 const TEMP_IMAGES_DIR = path.join(process.cwd(), 'temp', 'images');
 const TEMP_SVGS_DIR = path.join(process.cwd(), 'temp', 'svgs');
