@@ -614,11 +614,37 @@ function isComponentDef(val: any): val is ComponentPropDef {
   return typeof val.type === 'string' && (val.isComponent || val.nodeId || val.fromLib);
 }
 
+/**
+ * Recursively clear children from custom components only.
+ * Pure HTML elements keep their children, but nested custom components have children cleared.
+ * Custom components are identified by having 'data-component-type' attribute.
+ */
+function clearCustomComponentChildrenRecursive(element: any): void {
+  if (!element || element.nodeType !== 1) return;
+
+  // Check if this element is a custom component
+  const isCustomComponent = element.getAttribute && element.getAttribute('data-component-type');
+
+  if (isCustomComponent) {
+    // Clear all children from custom components
+    while (element.firstChild) {
+      element.removeChild(element.firstChild);
+    }
+  } else {
+    // For pure HTML elements, recursively process children
+    const children = Array.from(element.childNodes || []);
+    for (const child of children) {
+      clearCustomComponentChildrenRecursive(child);
+    }
+  }
+}
+
 function componentPropToJsx(comp: ComponentPropDef, options: ReactifyOptions): string {
   const componentName = comp.type;
 
-  // Case: nodeId reference without type - render the extracted HTML as the component
+  // Case: nodeId reference without type - render the extracted HTML
   // This handles { nodeId: "xxx", isComponent: true } format
+  // The node may be a pure HTML element or a custom component
   if (!componentName && comp.nodeId && options.extractedNodes) {
     const extractedHtml = options.extractedNodes.get(comp.nodeId);
     if (extractedHtml) {
@@ -626,11 +652,9 @@ function componentPropToJsx(comp: ComponentPropDef, options: ReactifyOptions): s
       const roots = getRoots(extractedHtml);
       const rootEl = roots.find((n: any) => n.nodeType === 1);
       if (rootEl) {
-        // Clear children - component props should not have Figma-rendered children
-        // The component will render its own content based on props
-        while ((rootEl as any).firstChild) {
-          (rootEl as any).removeChild((rootEl as any).firstChild);
-        }
+        // Recursively clear children from custom components only
+        // Pure HTML elements keep their children, but nested custom components have children cleared
+        clearCustomComponentChildrenRecursive(rootEl);
         // Convert to JSX
         return nodeToJsx(rootEl, 0, options).trim();
       }
