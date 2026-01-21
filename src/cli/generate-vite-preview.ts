@@ -7,11 +7,7 @@
  *   generated/
  *   ├── assets/          # SVG and image assets
  *   ├── Layout/
- *   │   ├── index.tsx
- *   │   └── index.css
- *   ├── Slice1/
- *   │   ├── index.tsx
- *   │   └── index.css
+ *   │   └── index.tsx
  *   └── index.ts         # barrel export
  *
  * Usage: npm run generate-vite
@@ -38,6 +34,13 @@ async function main() {
       cleanOutput: true,
       svgImportMode: 'svgr',
       imageImportMode: 'url',
+      // Tailwind CSS - no separate CSS file needed
+      includeCssImport: false,
+      // Remove debug data attributes (data-node-id, etc.) in production
+      // Set to true to keep them for debugging
+      debug: true,
+      // Format output code
+      formatOutput: true,
       logger: {
         info: (msg) => console.log(`[generate-vite] ${msg}`),
         warn: (msg) => console.warn(`[generate-vite] ${msg}`),

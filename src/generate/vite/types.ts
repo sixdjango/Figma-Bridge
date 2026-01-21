@@ -66,6 +66,23 @@ export interface ViteGeneratorOptions {
    * pxToRem: { enabled: true, baseFontSize: 16, precision: 4 }
    */
   pxToRem?: PxToRemOptions;
+  /**
+   * Whether to include CSS import in generated components
+   * Set to false when using Tailwind CSS
+   * @default true
+   */
+  includeCssImport?: boolean;
+  /**
+   * Whether to include debug data attributes (data-node-id, data-component-lib, etc.)
+   * in the final output. Set to true for debugging, false for production.
+   * @default false
+   */
+  debug?: boolean;
+  /**
+   * Whether to format the output code with prettier
+   * @default true
+   */
+  formatOutput?: boolean;
 }
 
 /**
@@ -108,7 +125,8 @@ export interface ViteGeneratorResult {
 export interface ComponentBuildContext {
   componentName: string;
   jsx: string;
-  cssImportPath: string;
+  /** CSS import path, if undefined CSS import is skipped */
+  cssImportPath?: string;
   sliceImports: string[];
   assetImportNames: string[];
   sliceNames: string[];

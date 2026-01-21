@@ -842,6 +842,15 @@ function nodeToJsx(node: any, depth: number, options: ReactifyOptions): string {
 
   const rawTag = (node.localName || node.tagName || '').toString();
   const tagKey = rawTag.toLowerCase();
+
+  // Skip head and body tags - they shouldn't appear in component JSX
+  if (tagKey === 'head' || tagKey === 'body') {
+    // Process children directly without the wrapper tag
+    const children = Array.from(node.childNodes || [])
+      .map((ch: any) => nodeToJsx(ch, depth, options))
+      .filter(Boolean);
+    return children.join('\n');
+  }
   const tagLookup = options.componentTags?.get(tagKey);
   // Use data-component-name if available (preserves names with dots like List.Item)
   const componentName = node.getAttribute('data-component-name');

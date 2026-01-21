@@ -31,7 +31,9 @@ export function buildComponentTsx(context: ComponentBuildContext): string {
 
   // Build imports section
   lines.push(`import React from 'react';`);
-  lines.push(`import '${cssImportPath}';`);
+  if (cssImportPath) {
+    lines.push(`import '${cssImportPath}';`);
+  }
   if (assetImportNames.length) {
     lines.push(`import { ${assetImportNames.join(', ')} } from '../assets';`);
   }
@@ -99,6 +101,134 @@ export function getAssetImportNames(component: ReactComponentFile): string[] {
 }
 
 /**
+ * Build component context with pre-extracted imports
+ */
+interface ComponentBuildContextWithImports {
+  componentName: string;
+  jsx: string;
+  cssImportPath?: string;
+  sliceImports: string[];
+  assetImportNames: string[];
+  customImportLines: string[];
+}
+
+/**
+ * Build TypeScript/React component source code with pre-extracted imports
+ * Use this when imports need to be extracted before processing JSX
+ */
+export function buildComponentTsxWithImports(context: ComponentBuildContextWithImports): string {
+  const {
+    componentName,
+    jsx,
+    cssImportPath,
+    sliceImports = [],
+    assetImportNames = [],
+    customImportLines = [],
+  } = context;
+
+  const lines: string[] = [];
+
+  // Build imports section
+  lines.push(`import React from 'react';`);
+  if (cssImportPath) {
+    lines.push(`import '${cssImportPath}';`);
+  }
+  if (assetImportNames.length) {
+    lines.push(`import { ${assetImportNames.join(', ')} } from '../assets';`);
+  }
+  customImportLines.forEach(imp => lines.push(imp));
+  sliceImports.forEach(imp => lines.push(imp));
+  lines.push('');
+
+  // Parse root element info for props merging
+  const rootInfo = parseJsxRoot(jsx);
+
+  if (rootInfo) {
+    // Generate component with props support
+    const baseClassNameLiteral = JSON.stringify(rootInfo.className);
+    const baseStyleEntries = Object.entries(rootInfo.style)
+      .map(([k, v]) => `'${k}': ${JSON.stringify(v)}`)
+      .join(', ');
+    const baseStyleLiteral = `{ ${baseStyleEntries} }`;
+
+    // Other attrs
+    const otherAttrsStr = Object.entries(rootInfo.otherAttrs)
+      .map(([k, v]) => `${k}="${v}"`)
+      .join(' ');
+    const otherAttrsPart = otherAttrsStr ? ` ${otherAttrsStr}` : '';
+
+    lines.push(`const baseClassName = ${baseClassNameLiteral};`);
+    lines.push(`const baseStyle = ${baseStyleLiteral};`);
+    lines.push('');
+    lines.push(`interface ${componentName}Props {`);
+    lines.push('  className?: string;');
+    lines.push('  style?: React.CSSProperties;');
+    lines.push('  [key: string]: unknown;');
+    lines.push('}');
+    lines.push('');
+    lines.push(`export const ${componentName}: React.FC<${componentName}Props> = ({ className, style, ...props }) => (`);
+    lines.push(`  <${rootInfo.tag}`);
+    lines.push(`    className={className ? \`\${baseClassName} \${className}\` : baseClassName}`);
+    lines.push(`    style={{ ...baseStyle, ...style }}`);
+    lines.push(`    {...props}${otherAttrsPart}`);
+    lines.push('  >');
+    if (rootInfo.innerJsx) {
+      lines.push(rootInfo.innerJsx);
+    }
+    lines.push(`  </${rootInfo.tag}>`);
+    lines.push(');');
+  } else {
+    // Fallback: simple component without props
+    lines.push(`export const ${componentName}: React.FC = () => (`);
+    lines.push(jsx);
+    lines.push(');');
+  }
+
+  lines.push('');
+  lines.push(`export default ${componentName};`);
+
+  return lines.join('\n');
+}
+
+/**
+ * Debug data attributes that should be stripped in production mode
+ * Note: data-component-name is NOT stripped because it's used for determining tag names
+ */
+const DEBUG_DATA_ATTRS = [
+  'data-node-id',
+  'data-layer-id',
+  'data-component-lib',
+  'data-import-way',
+  'data-component-type',
+  // 'data-component-name' is intentionally NOT stripped - it's used for tag name resolution
+];
+
+/**
+ * Strip debug data attributes from JSX content
+ */
+export function stripDebugAttributes(jsx: string): string {
+  let result = jsx;
+  for (const attr of DEBUG_DATA_ATTRS) {
+    // Match attribute with quoted value: data-node-id="..." or data-node-id='...'
+    result = result.replace(new RegExp(`\\s*${attr}="[^"]*"`, 'g'), '');
+    result = result.replace(new RegExp(`\\s*${attr}='[^']*'`, 'g'), '');
+  }
+  return result;
+}
+
+/**
+ * Format TypeScript/JSX code using simple formatting rules
+ * (For production, consider using prettier)
+ */
+export function formatCode(code: string): string {
+  // Basic formatting: normalize line endings and remove excessive blank lines
+  return code
+    .replace(/\r\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim() + '\n';
+}
+
+/**
  * Write component files to disk
  */
 export interface WriteComponentOptions {
@@ -106,6 +236,12 @@ export interface WriteComponentOptions {
   outputDir: string;
   sliceImports?: string[];
   sliceNames?: string[];
+  /** Whether to include CSS import */
+  includeCssImport?: boolean;
+  /** Whether to include debug data attributes */
+  debug?: boolean;
+  /** Whether to format output */
+  formatOutput?: boolean;
   onWrite?: (name: string, width: number, height: number) => void;
 }
 
@@ -115,6 +251,9 @@ export function writeComponent(options: WriteComponentOptions): string {
     outputDir,
     sliceImports = [],
     sliceNames = [],
+    includeCssImport = true,
+    debug = false,
+    formatOutput = true,
     onWrite,
   } = options;
 
@@ -122,22 +261,43 @@ export function writeComponent(options: WriteComponentOptions): string {
   ensureDir(componentDir);
   const assetImportNames = getAssetImportNames(component);
 
-  // Build component source
-  const tsxContent = buildComponentTsx({
+  // Extract custom component imports from ORIGINAL JSX (before stripping attributes)
+  // This is important because extractCustomComponentImports relies on data-component-lib
+  const sliceNameSet = new Set(sliceNames);
+  const customImports = extractCustomComponentImports(component.jsx)
+    .filter(imp => !sliceNameSet.has(imp.componentName));
+  const customImportLines = buildCustomComponentImportLines(customImports);
+
+  // Optionally strip debug attributes from JSX
+  let processedJsx = component.jsx;
+  if (!debug) {
+    processedJsx = stripDebugAttributes(processedJsx);
+  }
+
+  // Build component source with pre-extracted imports
+  let tsxContent = buildComponentTsxWithImports({
     componentName: component.name,
-    jsx: component.jsx,
-    cssImportPath: './index.css',
+    jsx: processedJsx,
+    cssImportPath: includeCssImport ? './index.css' : undefined,
     sliceImports,
     assetImportNames,
-    sliceNames,
+    customImportLines,
   });
+
+  // Format output if requested
+  if (formatOutput) {
+    tsxContent = formatCode(tsxContent);
+  }
 
   // Write files
   const tsxPath = path.join(componentDir, 'index.tsx');
-  const cssPath = path.join(componentDir, 'index.css');
-
   fs.writeFileSync(tsxPath, tsxContent, 'utf8');
-  fs.writeFileSync(cssPath, component.cssText, 'utf8');
+
+  // Only write CSS file if CSS import is included
+  if (includeCssImport) {
+    const cssPath = path.join(componentDir, 'index.css');
+    fs.writeFileSync(cssPath, component.cssText, 'utf8');
+  }
 
   onWrite?.(component.name, component.baseWidth, component.baseHeight);
 

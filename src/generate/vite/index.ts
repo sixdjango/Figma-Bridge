@@ -138,14 +138,23 @@ export async function generateViteComponents(
   });
   writeAssetsIndex(assetsDir, assetEntries);
 
+  // Determine options for component writing
+  const includeCssImport = opts.includeCssImport !== false; // default true
+  const debug = opts.debug === true; // default false
+  const formatOutput = opts.formatOutput !== false; // default true
+  const filesSuffix = includeCssImport ? '/index.tsx + index.css' : '/index.tsx';
+
   // Write slice components
   const sliceResults: ViteGeneratorResult['slices'] = [];
   for (const slice of result.slices) {
     const slicePath = writeComponent({
       component: slice,
       outputDir,
+      includeCssImport,
+      debug,
+      formatOutput,
       onWrite: (name, width, height) => {
-        logger.info(`Written: ${name}/index.tsx + index.css (${width}x${height})`);
+        logger.info(`Written: ${name}${filesSuffix} (${width}x${height})`);
       },
     });
     sliceResults.push({
@@ -167,8 +176,11 @@ export async function generateViteComponents(
     outputDir,
     sliceImports,
     sliceNames,
+    includeCssImport,
+    debug,
+    formatOutput,
     onWrite: (name, width, height) => {
-      logger.info(`Written: ${name}/index.tsx + index.css (${width}x${height})`);
+      logger.info(`Written: ${name}${filesSuffix} (${width}x${height})`);
     },
   });
 
