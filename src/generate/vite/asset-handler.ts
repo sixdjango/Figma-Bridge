@@ -24,6 +24,8 @@ export interface CopyAssetsOptions {
   assetsDir: string;
   tempImagesDir: string;
   tempSvgsDir: string;
+  /** Only copy assets that are actually referenced in the components */
+  onlyReferenced?: boolean;
 }
 
 /**
@@ -43,14 +45,40 @@ export interface CopyAssetsResult {
 /**
  * Copy assets from temp directories to output assets directory
  * Returns info about successfully copied files (filters out non-existent files)
+ *
+ * When onlyReferenced is true, only copies assets that are actually used in the components.
+ * This is determined by checking the assetImports array which contains only referenced assets.
  */
 export function copyAssets(options: CopyAssetsOptions): CopyAssetsResult {
-  const { result, assetsDir, tempImagesDir, tempSvgsDir } = options;
+  const { result, assetsDir, tempImagesDir, tempSvgsDir, onlyReferenced = true } = options;
 
   ensureDir(assetsDir);
 
-  const images = Array.isArray(result?.assets?.images) ? result.assets.images : [];
-  const svgs = Array.isArray(result?.assets?.svgs) ? result.assets.svgs : [];
+  // Build sets of referenced assets from assetImports
+  const referencedImages = new Set<string>();
+  const referencedSvgs = new Set<string>();
+
+  if (onlyReferenced && Array.isArray(result?.assetImports)) {
+    for (const asset of result.assetImports) {
+      if (!asset || !asset.importPath) continue;
+      const fileName = stripQuery(asset.importPath).split(/[\\/]/).pop() || '';
+      if (asset.kind === 'image') {
+        // Extract image ID from filename (e.g., "abc123.png" -> "abc123")
+        const imageId = getBaseName(fileName);
+        if (imageId) referencedImages.add(imageId);
+      } else if (asset.kind === 'svg') {
+        if (fileName) referencedSvgs.add(fileName);
+      }
+    }
+  }
+
+  // Get all available assets
+  const allImages = Array.isArray(result?.assets?.images) ? result.assets.images : [];
+  const allSvgs = Array.isArray(result?.assets?.svgs) ? result.assets.svgs : [];
+
+  // Filter to only referenced assets if enabled
+  const images = onlyReferenced ? allImages.filter(id => referencedImages.has(id)) : allImages;
+  const svgs = onlyReferenced ? allSvgs.filter(name => referencedSvgs.has(name)) : allSvgs;
 
   const copiedImages: string[] = [];
   const copiedSvgs: string[] = [];

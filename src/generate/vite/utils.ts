@@ -3,6 +3,8 @@
  */
 
 import fs from 'fs';
+import path from 'path';
+import archiver from 'archiver';
 import type { Logger } from './types';
 
 /**
@@ -112,4 +114,114 @@ export function toAssetIndexPath(importPath: string): string {
   const match = normalized.match(/(?:^|\/)assets\/(.+)$/);
   const rel = match ? match[1] : normalized.replace(/^\.?\//, '');
   return rel.startsWith('./') ? rel : `./${rel}`;
+}
+
+/**
+ * Result of ZIP archive creation
+ */
+export interface ZipArchiveResult {
+  /** Path to the ZIP file (if outputPath was provided) */
+  path?: string;
+  /** ZIP file buffer */
+  buffer: Buffer;
+  /** Size of the ZIP in bytes */
+  size: number;
+}
+
+/**
+ * Options for creating ZIP archive
+ */
+export interface CreateZipOptions {
+  /** Directory to archive */
+  sourceDir: string;
+  /** Optional path for the output ZIP file. If not provided, only buffer is returned */
+  outputPath?: string;
+  /** Root folder name inside the ZIP. Defaults to source directory name */
+  rootName?: string;
+  /** Logger */
+  logger?: Logger;
+}
+
+/**
+ * Create a ZIP archive of a directory
+ *
+ * @param sourceDir - Directory to archive
+ * @param outputPath - Optional path for the output ZIP file. If not provided, only buffer is returned.
+ * @param logger - Optional logger
+ * @returns Promise that resolves to ZIP result with path and buffer
+ */
+export async function createZipArchive(
+  sourceDir: string,
+  outputPath?: string,
+  logger: Logger = defaultLogger,
+  rootName?: string
+): Promise<ZipArchiveResult> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+
+    const archive = archiver('zip', {
+      zlib: { level: 9 }, // Maximum compression
+    });
+
+    // Collect buffer chunks
+    archive.on('data', (chunk: Buffer) => {
+      chunks.push(chunk);
+    });
+
+    archive.on('end', async () => {
+      const buffer = Buffer.concat(chunks);
+      const sizeKB = (buffer.length / 1024).toFixed(2);
+
+      // Write to file if path provided
+      if (outputPath) {
+        const outputDir = path.dirname(outputPath);
+        ensureDir(outputDir);
+        fs.writeFileSync(outputPath, buffer);
+        logger.info(`ZIP created: ${outputPath} (${sizeKB} KB)`);
+      } else {
+        logger.info(`ZIP buffer created (${sizeKB} KB)`);
+      }
+
+      resolve({
+        path: outputPath,
+        buffer,
+        size: buffer.length,
+      });
+    });
+
+    archive.on('error', (err) => {
+      logger.error(`ZIP creation failed: ${err.message}`);
+      reject(err);
+    });
+
+    archive.on('warning', (err) => {
+      if (err.code === 'ENOENT') {
+        logger.warn(`ZIP warning: ${err.message}`);
+      } else {
+        reject(err);
+      }
+    });
+
+    // Add directory contents with custom root name or default to directory name
+    const dirName = rootName || path.basename(sourceDir);
+    archive.directory(sourceDir, dirName);
+
+    // Finalize
+    archive.finalize();
+  });
+}
+
+/**
+ * Create a ZIP archive buffer of a directory (without writing to disk)
+ *
+ * @param sourceDir - Directory to archive
+ * @param logger - Optional logger
+ * @returns Promise that resolves to ZIP buffer
+ */
+export async function createZipBuffer(
+  sourceDir: string,
+  logger: Logger = defaultLogger
+): Promise<Buffer> {
+  const result = await createZipArchive(sourceDir, undefined, logger);
+  return result.buffer;
 }

@@ -23,7 +23,7 @@ import type {
   FigmaToReactResult,
   Logger,
 } from './types';
-import { ensureDir, cleanDir, defaultLogger, buildImportName } from './utils';
+import { ensureDir, cleanDir, defaultLogger, buildImportName, createZipArchive } from './utils';
 import { writeComponent, generateBarrelExport } from './component-builder';
 import {
   copyAssets,
@@ -39,6 +39,7 @@ export * from './utils';
 export * from './jsx-parser';
 export * from './component-builder';
 export * from './asset-handler';
+export * from './tailwind-to-less';
 
 /**
  * Default options for Vite generator
@@ -117,11 +118,14 @@ export async function generateViteComponents(
   });
 
   // Copy assets (returns only successfully copied files)
+  // By default, only copy assets that are actually referenced in the components
+  const onlyReferencedAssets = opts.onlyReferencedAssets !== false; // default true
   const copyResult = copyAssets({
     result,
     assetsDir,
     tempImagesDir,
     tempSvgsDir,
+    onlyReferenced: onlyReferencedAssets,
   });
 
   // Merge base64 saved images with copied images
@@ -142,7 +146,17 @@ export async function generateViteComponents(
   const includeCssImport = opts.includeCssImport !== false; // default true
   const debug = opts.debug === true; // default false
   const formatOutput = opts.formatOutput !== false; // default true
-  const filesSuffix = includeCssImport ? '/index.tsx + index.css' : '/index.tsx';
+  const cssMode = opts.cssMode || 'tailwind'; // default tailwind
+
+  // Determine file suffix for logging
+  let filesSuffix: string;
+  if (cssMode === 'less-module') {
+    filesSuffix = '/index.tsx + index.module.less';
+  } else if (includeCssImport) {
+    filesSuffix = '/index.tsx + index.css';
+  } else {
+    filesSuffix = '/index.tsx';
+  }
 
   // Write slice components
   const sliceResults: ViteGeneratorResult['slices'] = [];
@@ -153,6 +167,7 @@ export async function generateViteComponents(
       includeCssImport,
       debug,
       formatOutput,
+      cssMode,
       onWrite: (name, width, height) => {
         logger.info(`Written: ${name}${filesSuffix} (${width}x${height})`);
       },
@@ -179,6 +194,7 @@ export async function generateViteComponents(
     includeCssImport,
     debug,
     formatOutput,
+    cssMode,
     onWrite: (name, width, height) => {
       logger.info(`Written: ${name}${filesSuffix} (${width}x${height})`);
     },
@@ -193,6 +209,16 @@ export async function generateViteComponents(
   logger.info(`  Slices: ${result.slices.length}`);
   logger.info(`  Assets: ${copyResult.copiedSvgs.length} SVGs, ${copyResult.copiedImages.length} images`);
 
+  // Create ZIP archive if requested
+  let zipPath: string | undefined;
+  let zipBuffer: Buffer | undefined;
+  if (opts.outputZip) {
+    const zipFilePath = opts.zipPath || `${outputDir}.zip`;
+    const zipResult = await createZipArchive(outputDir, zipFilePath, logger);
+    zipPath = zipResult.path;
+    zipBuffer = zipResult.buffer;
+  }
+
   return {
     layout: {
       name: result.layout.name,
@@ -205,6 +231,8 @@ export async function generateViteComponents(
       svgs: copyResult.copiedSvgs,
       images: copyResult.copiedImages,
     },
+    zipPath,
+    zipBuffer,
   };
 }
 
@@ -225,4 +253,168 @@ export function createViteGenerator(baseOptions: Partial<ViteGeneratorOptions>) 
      */
     getOptions: () => ({ ...DEFAULT_OPTIONS, ...baseOptions }),
   };
+}
+
+/**
+ * Options for generating ZIP buffer only
+ */
+export interface GenerateZipBufferOptions {
+  /** Input: file path or parsed JSON object */
+  input: string | object;
+  /** Directory containing temporary image files */
+  tempImagesDir?: string;
+  /** Directory containing temporary SVG files */
+  tempSvgsDir?: string;
+  /** How SVGs should be imported */
+  svgImportMode?: 'svgr' | 'svgr-query' | 'url' | 'none';
+  /** How images should be imported */
+  imageImportMode?: 'url' | 'none';
+  /** Include CSS import in components */
+  includeCssImport?: boolean;
+  /** CSS mode: 'tailwind' or 'less-module' */
+  cssMode?: 'tailwind' | 'less-module';
+  /** Include debug data attributes */
+  debug?: boolean;
+  /** Format output code with Prettier */
+  formatOutput?: boolean;
+  /** Only copy referenced assets */
+  onlyReferencedAssets?: boolean;
+  /** Px to rem conversion options */
+  pxToRem?: {
+    enabled: boolean;
+    baseFontSize?: number;
+    precision?: number;
+  };
+  /** Root folder name inside the ZIP (default: 'generated') */
+  rootName?: string;
+  /** Custom logger */
+  logger?: Logger;
+}
+
+/**
+ * Result of ZIP buffer generation
+ */
+export interface GenerateZipBufferResult {
+  /** ZIP file buffer */
+  buffer: Buffer;
+  /** Size of the ZIP in bytes */
+  size: number;
+  /** Layout component info */
+  layout: {
+    name: string;
+    width: number;
+    height: number;
+  };
+  /** Slice components info */
+  slices: Array<{
+    name: string;
+    width: number;
+    height: number;
+  }>;
+  /** Asset counts */
+  assets: {
+    svgCount: number;
+    imageCount: number;
+  };
+}
+
+/**
+ * Generate Vite React components and return only the ZIP buffer
+ *
+ * This method generates components to a temporary directory, creates a ZIP buffer,
+ * and cleans up the temporary files. No permanent files are written to disk.
+ *
+ * @param options - Generator options
+ * @returns Promise that resolves to ZIP buffer result
+ *
+ * @example
+ * ```typescript
+ * const result = await generateViteZipBuffer({
+ *   input: figmaJsonData,
+ *   cssMode: 'tailwind',
+ * });
+ *
+ * // Use buffer for HTTP response
+ * res.setHeader('Content-Type', 'application/zip');
+ * res.send(result.buffer);
+ * ```
+ */
+export async function generateViteZipBuffer(
+  options: GenerateZipBufferOptions
+): Promise<GenerateZipBufferResult> {
+  const logger = options.logger || defaultLogger;
+
+  // Create a unique temporary directory
+  const tempDir = path.join(
+    process.cwd(),
+    'temp',
+    `vite-gen-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  );
+
+  try {
+    // Generate components to temp directory
+    const result = await generateViteComponents({
+      input: options.input,
+      outputDir: tempDir,
+      tempImagesDir: options.tempImagesDir,
+      tempSvgsDir: options.tempSvgsDir,
+      cleanOutput: true,
+      svgImportMode: options.svgImportMode || 'svgr',
+      imageImportMode: options.imageImportMode || 'url',
+      includeCssImport: options.includeCssImport,
+      cssMode: options.cssMode || 'tailwind',
+      debug: options.debug || false,
+      formatOutput: options.formatOutput !== false,
+      onlyReferencedAssets: options.onlyReferencedAssets !== false,
+      pxToRem: options.pxToRem,
+      outputZip: false, // We'll create the buffer ourselves
+      logger: {
+        // Use silent logger for internal generation, only log final result
+        info: () => {},
+        warn: logger.warn,
+        error: logger.error,
+      },
+    });
+
+    // Create ZIP buffer from temp directory with clean root name
+    const zipResult = await createZipArchive(
+      tempDir,
+      undefined,
+      {
+        info: () => {}, // Silent
+        warn: logger.warn,
+        error: logger.error,
+      },
+      options.rootName || 'generated' // Use clean root folder name
+    );
+
+    logger.info(`Generated ZIP buffer: ${(zipResult.size / 1024).toFixed(2)} KB`);
+    logger.info(`  Layout: ${result.layout.name} (${result.layout.width}x${result.layout.height})`);
+    logger.info(`  Slices: ${result.slices.length}`);
+    logger.info(`  Assets: ${result.assets.svgs.length} SVGs, ${result.assets.images.length} images`);
+
+    return {
+      buffer: zipResult.buffer,
+      size: zipResult.size,
+      layout: {
+        name: result.layout.name,
+        width: result.layout.width,
+        height: result.layout.height,
+      },
+      slices: result.slices.map((s) => ({
+        name: s.name,
+        width: s.width,
+        height: s.height,
+      })),
+      assets: {
+        svgCount: result.assets.svgs.length,
+        imageCount: result.assets.images.length,
+      },
+    };
+  } finally {
+    // Clean up temp directory
+    if (fs.existsSync(tempDir)) {
+      fs.rmSync(tempDir, { recursive: true });
+    }
+  }
 }

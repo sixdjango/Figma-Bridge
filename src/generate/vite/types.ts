@@ -83,6 +83,30 @@ export interface ViteGeneratorOptions {
    * @default true
    */
   formatOutput?: boolean;
+  /**
+   * Only copy assets that are actually referenced in the generated components.
+   * When true, unused assets will not be copied to the output directory.
+   * @default true
+   */
+  onlyReferencedAssets?: boolean;
+  /**
+   * CSS output mode:
+   * - 'tailwind': Use Tailwind CSS classes inline (default)
+   * - 'less-module': Generate LESS module file with converted styles
+   * @default 'tailwind'
+   */
+  cssMode?: 'tailwind' | 'less-module';
+  /**
+   * Whether to create a ZIP archive of the generated output.
+   * When enabled, creates a ZIP file containing all generated files.
+   * @default false
+   */
+  outputZip?: boolean;
+  /**
+   * Custom path for the ZIP file.
+   * If not specified, defaults to `{outputDir}.zip`
+   */
+  zipPath?: string;
 }
 
 /**
@@ -117,6 +141,10 @@ export interface ViteGeneratorResult {
     svgs: string[];
     images: string[];
   };
+  /** Path to the generated ZIP file (if outputZip was enabled) */
+  zipPath?: string;
+  /** ZIP file buffer (if outputZip was enabled) */
+  zipBuffer?: Buffer;
 }
 
 /**

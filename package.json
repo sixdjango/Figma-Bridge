@@ -19,6 +19,7 @@
     "diff-images": "ts-node src/cli/diff-images.ts",
     "test-fixtures": "ts-node src/cli/test-fixtures.ts",
     "generate-vite": "ts-node src/cli/generate-vite-preview.ts",
+    "generate-zip": "ts-node src/cli/generate-zip-buffer.ts",
     "lint": "eslint src/**/*.ts",
     "lint:fix": "eslint src/**/*.ts --fix"
   },
@@ -30,6 +31,7 @@
   "author": "",
   "license": "MIT",
   "devDependencies": {
+    "@types/archiver": "^7.0.0",
     "@types/cors": "^2.8.17",
     "@types/express": "^4.17.21",
     "@types/js-beautify": "^1.14.3",
@@ -46,6 +48,7 @@
     "typescript": "^5.4.2"
   },
   "dependencies": {
+    "archiver": "^7.0.1",
     "cors": "^2.8.5",
     "express": "^4.18.3",
     "figma-html-bridge": "file:packages/bridge-pipeline",

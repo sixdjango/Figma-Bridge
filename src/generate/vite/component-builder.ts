@@ -7,6 +7,7 @@ import path from 'path';
 import type { ReactComponentFile, ComponentBuildContext } from './types';
 import { ensureDir } from './utils';
 import { parseJsxRoot, extractCustomComponentImports, buildCustomComponentImportLines } from './jsx-parser';
+import { convertToLessModule, generateLessImport } from './tailwind-to-less';
 
 /**
  * Build TypeScript/React component source code
@@ -242,6 +243,12 @@ export interface WriteComponentOptions {
   debug?: boolean;
   /** Whether to format output */
   formatOutput?: boolean;
+  /**
+   * CSS output mode:
+   * - 'tailwind': Use Tailwind CSS classes inline (default)
+   * - 'less-module': Generate LESS module file with converted styles
+   */
+  cssMode?: 'tailwind' | 'less-module';
   onWrite?: (name: string, width: number, height: number) => void;
 }
 
@@ -254,6 +261,7 @@ export function writeComponent(options: WriteComponentOptions): string {
     includeCssImport = true,
     debug = false,
     formatOutput = true,
+    cssMode = 'tailwind',
     onWrite,
   } = options;
 
@@ -274,11 +282,26 @@ export function writeComponent(options: WriteComponentOptions): string {
     processedJsx = stripDebugAttributes(processedJsx);
   }
 
+  // Handle LESS module conversion
+  let lessContent: string | undefined;
+  let cssImportPath: string | undefined;
+
+  if (cssMode === 'less-module') {
+    // Convert Tailwind classes to LESS module
+    const lessResult = convertToLessModule(processedJsx, component.name);
+    processedJsx = lessResult.jsx;
+    lessContent = lessResult.less;
+    cssImportPath = './index.module.less';
+    customImportLines.unshift(generateLessImport('index.module.less'));
+  } else if (includeCssImport) {
+    cssImportPath = './index.css';
+  }
+
   // Build component source with pre-extracted imports
   let tsxContent = buildComponentTsxWithImports({
     componentName: component.name,
     jsx: processedJsx,
-    cssImportPath: includeCssImport ? './index.css' : undefined,
+    cssImportPath: cssMode === 'less-module' ? undefined : cssImportPath, // LESS import is in customImportLines
     sliceImports,
     assetImportNames,
     customImportLines,
@@ -293,8 +316,14 @@ export function writeComponent(options: WriteComponentOptions): string {
   const tsxPath = path.join(componentDir, 'index.tsx');
   fs.writeFileSync(tsxPath, tsxContent, 'utf8');
 
-  // Only write CSS file if CSS import is included
-  if (includeCssImport) {
+  // Write LESS module file
+  if (cssMode === 'less-module' && lessContent) {
+    const lessPath = path.join(componentDir, 'index.module.less');
+    fs.writeFileSync(lessPath, lessContent, 'utf8');
+  }
+
+  // Only write CSS file if CSS import is included and not using LESS module
+  if (cssMode !== 'less-module' && includeCssImport) {
     const cssPath = path.join(componentDir, 'index.css');
     fs.writeFileSync(cssPath, component.cssText, 'utf8');
   }
