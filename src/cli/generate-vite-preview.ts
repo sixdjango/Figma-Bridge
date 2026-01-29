@@ -37,7 +37,7 @@ async function main() {
       // Tailwind CSS - no separate CSS file needed
       includeCssImport: false,
       // CSS mode: 'tailwind' (default) or 'less-module'
-      // cssMode: 'less-module',
+      cssMode: 'less-module',
       // Create ZIP archive of generated output
       outputZip: true,
       // Remove debug data attributes (data-node-id, etc.) in production
