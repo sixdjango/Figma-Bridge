@@ -20,6 +20,9 @@
     "test-fixtures": "ts-node src/cli/test-fixtures.ts",
     "generate-vite": "ts-node src/cli/generate-vite-preview.ts",
     "generate-zip": "ts-node src/cli/generate-zip-buffer.ts",
+    "optimize-layers": "ts-node src/cli/optimize-nested-layers.ts",
+    "optimize-component": "ts-node src/cli/optimize-react-component.ts",
+    "optimize-all": "ts-node src/cli/optimize-all.ts",
     "lint": "eslint src/**/*.ts",
     "lint:fix": "eslint src/**/*.ts --fix"
   },
