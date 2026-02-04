@@ -40,6 +40,7 @@ export * from './jsx-parser';
 export * from './component-builder';
 export * from './asset-handler';
 export * from './tailwind-to-less';
+export * from './optimizer';
 
 /**
  * Default options for Vite generator
@@ -147,6 +148,8 @@ export async function generateViteComponents(
   const debug = opts.debug === true; // default false
   const formatOutput = opts.formatOutput !== false; // default true
   const cssMode = opts.cssMode || 'tailwind'; // default tailwind
+  const optimizeOutput = opts.optimizeOutput === true; // default false
+  const optimizeOptions = opts.optimizeOptions;
 
   // Determine file suffix for logging
   let filesSuffix: string;
@@ -168,6 +171,8 @@ export async function generateViteComponents(
       debug,
       formatOutput,
       cssMode,
+      optimizeOutput,
+      optimizeOptions,
       onWrite: (name, width, height) => {
         logger.info(`Written: ${name}${filesSuffix} (${width}x${height})`);
       },
@@ -195,6 +200,8 @@ export async function generateViteComponents(
     debug,
     formatOutput,
     cssMode,
+    optimizeOutput,
+    optimizeOptions,
     onWrite: (name, width, height) => {
       logger.info(`Written: ${name}${filesSuffix} (${width}x${height})`);
     },
@@ -289,6 +296,14 @@ export interface GenerateZipBufferOptions {
   rootName?: string;
   /** Custom logger */
   logger?: Logger;
+  /**
+   * Whether to optimize the generated output
+   * Converts inline styles to Tailwind, merges nested divs, etc.
+   * Only applies to 'tailwind' cssMode.
+   */
+  optimizeOutput?: boolean;
+  /** Optimization options (used when optimizeOutput is true) */
+  optimizeOptions?: ViteGeneratorOptions['optimizeOptions'];
 }
 
 /**
@@ -367,6 +382,8 @@ export async function generateViteZipBuffer(
       formatOutput: options.formatOutput !== false,
       onlyReferencedAssets: options.onlyReferencedAssets !== false,
       pxToRem: options.pxToRem,
+      optimizeOutput: options.optimizeOutput,
+      optimizeOptions: options.optimizeOptions,
       outputZip: false, // We'll create the buffer ourselves
       logger: {
         // Use silent logger for internal generation, only log final result

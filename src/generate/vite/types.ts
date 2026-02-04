@@ -3,9 +3,11 @@
  */
 
 import type { FigmaToReactResult, ReactComponentFile, PxToRemOptions } from 'figma-html-bridge';
+import type { OptimizeOptions } from './optimizer';
 
 // Re-export for convenience
 export type { FigmaToReactResult, ReactComponentFile, PxToRemOptions };
+export type { OptimizeOptions };
 
 /**
  * Parsed root element information from JSX
@@ -107,6 +109,21 @@ export interface ViteGeneratorOptions {
    * If not specified, defaults to `{outputDir}.zip`
    */
   zipPath?: string;
+  /**
+   * Whether to optimize the generated output.
+   * Optimizations include:
+   * - Converting inline styles to Tailwind classes
+   * - Removing identity transforms
+   * - Merging nested single-child divs
+   * - Simplifying colors and JSX strings
+   * Only applies to 'tailwind' cssMode.
+   * @default false
+   */
+  optimizeOutput?: boolean;
+  /**
+   * Optimization options (used when optimizeOutput is true)
+   */
+  optimizeOptions?: OptimizeOptions;
 }
 
 /**

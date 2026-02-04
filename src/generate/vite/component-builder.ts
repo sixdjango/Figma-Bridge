@@ -8,6 +8,7 @@ import type { ReactComponentFile, ComponentBuildContext } from './types';
 import { ensureDir } from './utils';
 import { parseJsxRoot, extractCustomComponentImports, buildCustomComponentImportLines } from './jsx-parser';
 import { convertToLessModule, generateLessImport } from './tailwind-to-less';
+import { optimizeReactComponent, type OptimizeOptions } from './optimizer';
 
 /**
  * Build TypeScript/React component source code
@@ -249,6 +250,16 @@ export interface WriteComponentOptions {
    * - 'less-module': Generate LESS module file with converted styles
    */
   cssMode?: 'tailwind' | 'less-module';
+  /**
+   * Whether to optimize the generated output
+   * - Converts inline styles to Tailwind classes
+   * - Removes identity transforms
+   * - Merges nested single-child divs
+   * - Simplifies colors and JSX strings
+   */
+  optimizeOutput?: boolean;
+  /** Optimization options (used when optimizeOutput is true) */
+  optimizeOptions?: OptimizeOptions;
   onWrite?: (name: string, width: number, height: number) => void;
 }
 
@@ -262,6 +273,8 @@ export function writeComponent(options: WriteComponentOptions): string {
     debug = false,
     formatOutput = true,
     cssMode = 'tailwind',
+    optimizeOutput = false,
+    optimizeOptions,
     onWrite,
   } = options;
 
@@ -310,6 +323,11 @@ export function writeComponent(options: WriteComponentOptions): string {
   // Format output if requested
   if (formatOutput) {
     tsxContent = formatCode(tsxContent);
+  }
+
+  // Optimize output if requested (only for tailwind mode, as LESS module has its own structure)
+  if (optimizeOutput && cssMode === 'tailwind') {
+    tsxContent = optimizeReactComponent(tsxContent, optimizeOptions);
   }
 
   // Write files
