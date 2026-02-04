@@ -1106,6 +1106,39 @@ function buildMergedElement(
 }
 
 /**
+ * Check if a position is inside a JSX prop expression like prefix={...} or label={...}
+ */
+function isInsideJsxProp(content: string, pos: number): boolean {
+  let depth = 0;
+  let i = pos - 1;
+
+  while (i >= 0) {
+    const char = content[i];
+
+    if (char === "}") {
+      depth++;
+    } else if (char === "{") {
+      depth--;
+      if (depth < 0) {
+        let j = i - 1;
+        while (j >= 0 && /\s/.test(content[j])) j--;
+        if (j >= 0 && content[j] === "=") {
+          return true;
+        }
+        depth = 0;
+      }
+    } else if (char === "<" && depth === 0) {
+      return false;
+    } else if (char === ">" && depth === 0) {
+      return false;
+    }
+    i--;
+  }
+
+  return false;
+}
+
+/**
  * Optimize nested single-child divs
  */
 function optimizeNestedDivs(content: string): string {
@@ -1122,6 +1155,12 @@ function optimizeNestedDivs(content: string): string {
 
     while ((match = divPattern.exec(result)) !== null) {
       const outerStart = match.index;
+
+      // Skip divs that are inside JSX prop expressions
+      if (isInsideJsxProp(result, outerStart)) {
+        continue;
+      }
+
       const openTagEnd = findOpenTagEnd(result, outerStart + 5);
       if (openTagEnd === -1) continue;
 

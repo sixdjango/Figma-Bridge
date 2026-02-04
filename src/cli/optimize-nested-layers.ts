@@ -680,6 +680,48 @@ function buildMergedElement(
 }
 
 /**
+ * Check if a position is inside a JSX prop expression like prefix={...} or label={...}
+ * We detect this by looking for an unclosed ={  before the position
+ */
+function isInsideJsxProp(content: string, pos: number): boolean {
+  // Look backwards from pos to find if we're inside a prop expression
+  let depth = 0;
+  let i = pos - 1;
+
+  while (i >= 0) {
+    const char = content[i];
+
+    if (char === '}') {
+      depth++;
+    } else if (char === '{') {
+      depth--;
+      // If depth goes negative, check if this is a prop assignment like ={
+      if (depth < 0) {
+        // Look back to see if there's an = before this {
+        let j = i - 1;
+        while (j >= 0 && /\s/.test(content[j])) j--;
+        if (j >= 0 && content[j] === '=') {
+          // This is a prop assignment, we're inside it
+          return true;
+        }
+        // Not a prop assignment, reset
+        depth = 0;
+      }
+    } else if (char === '<' && depth === 0) {
+      // We've hit a tag start without being in a prop, we're not inside a JSX prop
+      return false;
+    } else if (char === '>' && depth === 0) {
+      // We've hit a tag end, check if it's a self-closing or opening tag
+      // If opening tag, we're in element children, not a prop
+      return false;
+    }
+    i--;
+  }
+
+  return false;
+}
+
+/**
  * Main optimization function
  */
 function optimizeNestedDivs(content: string): string {
@@ -696,6 +738,12 @@ function optimizeNestedDivs(content: string): string {
 
     while ((match = divPattern.exec(result)) !== null) {
       const outerStart = match.index;
+
+      // Skip divs that are inside JSX prop expressions
+      if (isInsideJsxProp(result, outerStart)) {
+        continue;
+      }
+
       const openTagEnd = findOpenTagEnd(result, outerStart + 5);
       if (openTagEnd === -1) continue;
 
