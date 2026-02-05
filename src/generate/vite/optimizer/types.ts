@@ -108,4 +108,9 @@ export const SEMANTIC_CONFLICTS: readonly { parent: readonly string[]; child: re
     parent: ["items-center", "items-start", "items-end", "items-baseline", "items-stretch"],
     child: ["self-auto", "self-start", "self-end", "self-center", "self-stretch", "self-baseline"],
   },
+  // When child has flex (default row direction), remove parent's flex-direction
+  {
+    parent: ["flex-col", "flex-col-reverse", "flex-row", "flex-row-reverse"],
+    child: ["flex", "inline-flex"],
+  },
 ];
