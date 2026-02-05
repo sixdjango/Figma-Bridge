@@ -253,12 +253,28 @@ function mergeClassNames(parentClass: string, childClass: string): MergedClassRe
   };
 }
 
+// Flex-related style properties that should be removed when flex container is merged away
+const FLEX_DEPENDENT_STYLES = ["flexBasis", "flexGrow", "flexShrink"];
+
+/**
+ * Check if flex container is being merged away
+ * Returns true if outer div has flex class, meaning we're merging away a flex container
+ * In this case, inner element's flexBasis/flexGrow/flexShrink should be removed
+ * because they were meant for the outer flex container that's being removed
+ */
+function shouldRemoveFlexStyles(outerClassName: string): boolean {
+  // If outer has flex, we're removing a flex container
+  // The inner element's flex-related styles (flexBasis, etc.) were for this container
+  return outerClassName.includes("flex");
+}
+
 /**
  * Merge two style entry lists
  */
 function mergeStyles(
   parentStyle: ParsedStyleEntry[],
-  childStyle: ParsedStyleEntry[]
+  childStyle: ParsedStyleEntry[],
+  removeFlexStyles: boolean = false
 ): { merged: ParsedStyleEntry[]; width: string | null; height: string | null; positionType: string | null } {
   const merged: ParsedStyleEntry[] = [];
   const seenKeys = new Set<string>();
@@ -270,6 +286,8 @@ function mergeStyles(
   // Process child styles first (higher priority)
   for (const entry of childStyle) {
     if (POSITION_PROPS.includes(entry.key)) continue; // Will be summed separately
+    // Skip flex-dependent styles if flex direction changed
+    if (removeFlexStyles && FLEX_DEPENDENT_STYLES.includes(entry.key)) continue;
     if (entry.key === "width") {
       width = entry.value;
       continue;
@@ -289,6 +307,8 @@ function mergeStyles(
   // Add parent styles that don't conflict
   for (const entry of parentStyle) {
     if (POSITION_PROPS.includes(entry.key)) continue;
+    // Skip flex-dependent styles if flex direction changed
+    if (removeFlexStyles && FLEX_DEPENDENT_STYLES.includes(entry.key)) continue;
     if (seenKeys.has(entry.key)) {
       // Parent priority props
       if (PARENT_PRIORITY_PROPS.includes(entry.key)) {
@@ -461,6 +481,9 @@ export function optimizeNestedDivs(code: string): string {
             positionType: classPositionType,
           } = mergeClassNames(outerClassName, childClassName);
 
+          // Check if flex direction changed during merge
+          const removeFlexStyles = shouldRemoveFlexStyles(outerClassName);
+
           // Merge styles
           const stylePositions = sumPositions(outerStyle, childStyle);
           const {
@@ -468,7 +491,7 @@ export function optimizeNestedDivs(code: string): string {
             width: styleWidth,
             height: styleHeight,
             positionType: stylePositionType,
-          } = mergeStyles(outerStyle, childStyle);
+          } = mergeStyles(outerStyle, childStyle, removeFlexStyles);
 
           // Build final className
           const finalClassName = buildMergedClassName(
@@ -525,6 +548,9 @@ export function optimizeNestedDivs(code: string): string {
             positionType: classPositionType,
           } = mergeClassNames(outerClassName, innerClassName);
 
+          // Check if flex direction changed during merge
+          const removeFlexStyles = shouldRemoveFlexStyles(outerClassName);
+
           // Merge styles and sum positions
           const stylePositions = sumPositions(outerStyle, innerStyle);
           const {
@@ -532,7 +558,7 @@ export function optimizeNestedDivs(code: string): string {
             width: styleWidth,
             height: styleHeight,
             positionType: stylePositionType,
-          } = mergeStyles(outerStyle, innerStyle);
+          } = mergeStyles(outerStyle, innerStyle, removeFlexStyles);
 
           // Build final className
           const finalClassName = buildMergedClassName(
