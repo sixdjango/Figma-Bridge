@@ -299,6 +299,14 @@ function filterIgnoredStyles(css: string, ignoreStyle?: string[]): string {
   return filtered.join(';') + (filtered.length > 0 ? ';' : '');
 }
 
+/**
+ * Check if a class should be removed based on ignoreClass list
+ */
+function shouldRemoveClass(className: string, ignoreClass?: string[]): boolean {
+  if (!ignoreClass || ignoreClass.length === 0) return false;
+  return ignoreClass.includes(className);
+}
+
 function applyCustomComponent(cfg: RenderBoxConfig, def?: CustomComponentDef): void {
   const { tagName, attrs } = buildCustomComponentAttrs(def);
   if (tagName) cfg.tagName = tagName;
@@ -306,19 +314,24 @@ function applyCustomComponent(cfg: RenderBoxConfig, def?: CustomComponentDef): v
     cfg.customAttributes = cfg.customAttributes ? { ...cfg.customAttributes, ...attrs } : attrs;
   }
 
-  // When replacing with custom component, remove default 'content-layer' class from wrapper inner element
-  if (def) {
-    console.log('[DEBUG applyCustomComponent]', { nodeId: def.nodeId, type: def.type, hasOptions: !!cfg.options, ignoreClass: def.ignoreClass });
-    if (cfg.options) {
+  const ignoreClass = def?.ignoreClass;
+  const hasIgnoreClass = ignoreClass && ignoreClass.length > 0;
+
+  // Handle innerClassName for wrapper elements:
+  // 1. Custom components should not have 'content-layer' class by default
+  // 2. If ignoreClass includes 'content-layer', remove it from inner wrapper
+  if (cfg.options) {
+    const shouldRemoveContentLayer = def || shouldRemoveClass('content-layer', ignoreClass);
+    if (shouldRemoveContentLayer) {
       cfg.options.innerClassName = '';
     }
   }
 
-  // Apply ignoreClass filter
-  if (def?.ignoreClass && def.ignoreClass.length > 0) {
-    cfg.className = filterIgnoredClasses(cfg.className, def.ignoreClass);
+  // Apply ignoreClass filter to main className
+  if (hasIgnoreClass) {
+    cfg.className = filterIgnoredClasses(cfg.className, ignoreClass);
     // Store ignoreClass as data attribute for post-processing (e.g., optimizer)
-    const ignoreClassStr = def.ignoreClass.join(',');
+    const ignoreClassStr = ignoreClass.join(',');
     cfg.customAttributes = cfg.customAttributes
       ? { ...cfg.customAttributes, 'data-ignore-class': ignoreClassStr }
       : { 'data-ignore-class': ignoreClassStr };

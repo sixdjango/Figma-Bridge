@@ -283,6 +283,18 @@ function parseIgnoreClasses(opening: n.JSXOpeningElement): Set<string> {
 }
 
 /**
+ * Filter existing classes based on ignore list
+ * Returns filtered className string
+ */
+function filterExistingClasses(existingClasses: string, ignoreClasses: Set<string>): string {
+  if (ignoreClasses.size === 0) return existingClasses;
+  return existingClasses
+    .split(/\s+/)
+    .filter((cls) => cls && !ignoreClasses.has(cls))
+    .join(" ");
+}
+
+/**
  * Convert inline styles to Tailwind classes
  */
 export function convertStylesToTailwind(code: string): string {
@@ -306,6 +318,12 @@ export function convertStylesToTailwind(code: string): string {
           const attrs = opening.attributes || [];
           opening.attributes = attrs.filter((attr) => attr !== ignoreAttr);
         }
+      }
+
+      // Handle existing className filtering (e.g., remove 'content-layer' if in ignoreClass)
+      if (classAttr && n.StringLiteral.check(classAttr.value) && ignoreClasses.size > 0) {
+        const filteredClasses = filterExistingClasses(classAttr.value.value, ignoreClasses);
+        classAttr.value.value = filteredClasses;
       }
 
       // Need style to convert
