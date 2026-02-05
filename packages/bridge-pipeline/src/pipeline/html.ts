@@ -306,6 +306,11 @@ function applyCustomComponent(cfg: RenderBoxConfig, def?: CustomComponentDef): v
     cfg.customAttributes = cfg.customAttributes ? { ...cfg.customAttributes, ...attrs } : attrs;
   }
 
+  // When replacing with custom component, remove default 'content-layer' class from wrapper inner element
+  if (def && cfg.options) {
+    cfg.options.innerClassName = '';
+  }
+
   // Apply ignoreClass filter
   if (def?.ignoreClass && def.ignoreClass.length > 0) {
     cfg.className = filterIgnoredClasses(cfg.className, def.ignoreClass);
