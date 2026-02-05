@@ -2,15 +2,16 @@
  * React Component Optimizer
  *
  * This module re-exports the AST-based optimizer implementation.
- * The string-based implementation is available in optimizer.string.ts.
+ * The string-based implementation is available in optimizer.string.ts for reference.
  */
 
-// Re-export AST-based optimizer
+// Re-export all AST-based optimizer functions
 export {
   optimizeReactComponent,
   default,
   OptimizeOptions,
   optimizeNestedDivs,
+  optimizeRootMerge,
   convertStylesToTailwind,
   removeIdentityTransforms,
   removeAutoSizes,
@@ -20,6 +21,3 @@ export {
   simplifyColors,
   simplifyJsxStrings,
 } from "./optimizer/index";
-
-// Re-export root merge from string-based (TODO: migrate to AST)
-export { optimizeRootMerge } from "./optimizer.string";

@@ -23,13 +23,98 @@ import {
   setClassName,
 } from "./ast-utils";
 import type { ParsedStyleEntry, ParsedClassName, MergedClassResult } from "./types";
+import { CONFLICT_GROUPS, SEMANTIC_CONFLICTS } from "./types";
 
 const POSITION_PROPS = ["left", "top", "right", "bottom"];
 const POSITION_TYPE_CLASSES = ["absolute", "relative", "fixed", "sticky"];
 const PARENT_PRIORITY_PROPS = ["zIndex"];
 
 /**
+ * Get conflict group key for a class
+ * Returns a unique key if the class belongs to a conflict group
+ */
+function getConflictGroup(className: string): string | null {
+  // Check explicit conflict groups
+  for (const group of CONFLICT_GROUPS) {
+    if (group.includes(className)) {
+      return group.join(",");
+    }
+  }
+
+  // Dynamic prefixes that are mutually exclusive
+  const dynamicPrefixes = [
+    "w-", "h-", "min-w-", "max-w-", "min-h-", "max-h-",
+    "top-", "bottom-", "left-", "right-", "z-",
+    "gap-", "gap-x-", "gap-y-",
+    "p-", "px-", "py-", "pt-", "pb-", "pl-", "pr-",
+    "m-", "mx-", "my-", "mt-", "mb-", "ml-", "mr-",
+    "rounded-", "opacity-", "bg-", "leading-", "shadow-",
+  ];
+
+  for (const prefix of dynamicPrefixes) {
+    if (className.startsWith(prefix)) {
+      return prefix;
+    }
+  }
+
+  // Handle text-[size] vs text-[color] - need to distinguish
+  if (className.startsWith("text-")) {
+    // text-left, text-center, etc. are text alignment
+    if (["text-left", "text-center", "text-right", "text-justify"].includes(className)) {
+      return "text-align";
+    }
+    // text-xs, text-sm, text-base, text-lg, text-xl, etc. are text size
+    if (/^text-(xs|sm|base|lg|xl|2xl|3xl|4xl|5xl|6xl|7xl|8xl|9xl)$/.test(className)) {
+      return "text-size";
+    }
+    // text-[XXpx] is text size
+    if (/^text-\[\d+(\.\d+)?(px|rem|em)\]$/.test(className)) {
+      return "text-size";
+    }
+    // text-[#XXX] or text-[rgb(...)] is text color
+    if (/^text-\[#|^text-\[rgb/.test(className)) {
+      return "text-color";
+    }
+    // Default: treat as text color
+    return "text-color";
+  }
+
+  // Handle font-[family]
+  if (className.startsWith("font-")) {
+    // font-thin, font-bold, etc. are font weights
+    if (/^font-(thin|extralight|light|normal|medium|semibold|bold|extrabold|black)$/.test(className)) {
+      return "font-weight";
+    }
+    // font-[xxx] is font family
+    if (/^font-\[/.test(className)) {
+      return "font-family";
+    }
+    return "font-weight";
+  }
+
+  return null;
+}
+
+/**
+ * Check if parent class has semantic conflict with child classes
+ */
+function hasSemanticConflict(parentClass: string, childClasses: string[]): boolean {
+  for (const conflict of SEMANTIC_CONFLICTS) {
+    if (conflict.parent.includes(parentClass)) {
+      // Check if any child class is in the child conflict group
+      for (const childClass of childClasses) {
+        if (conflict.child.includes(childClass)) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+/**
  * Merge two className strings with position summing
+ * Child classes have priority over parent classes
  */
 function mergeClassNames(parentClass: string, childClass: string): MergedClassResult {
   const parentParsed = parseClassName(parentClass);
@@ -56,26 +141,57 @@ function mergeClassNames(parentClass: string, childClass: string): MergedClassRe
 
   // Merge classes - child first (higher priority), then parent
   const mergedClasses: string[] = [];
-  const seenBases = new Set<string>();
+  const seenConflictGroups = new Set<string>();
+  const seenClasses = new Set<string>();
 
-  // Add child classes first
+  // Collect all child classes for semantic conflict checking
+  const allChildClasses = [...childParsed.classes];
+  if (childParsed.positionType) {
+    allChildClasses.push(childParsed.positionType);
+  }
+
+  // Add child classes first (they have priority)
   for (const cls of childParsed.classes) {
     if (POSITION_TYPE_CLASSES.includes(cls)) {
-      seenBases.add("__position_type__");
+      seenConflictGroups.add("__position_type__");
       continue;
     }
+
+    // Skip duplicates
+    if (seenClasses.has(cls)) continue;
+
     mergedClasses.push(cls);
-    const base = cls.split("-")[0].split("[")[0];
-    seenBases.add(base);
+    seenClasses.add(cls);
+
+    // Mark conflict group as seen
+    const conflictGroup = getConflictGroup(cls);
+    if (conflictGroup) {
+      seenConflictGroups.add(conflictGroup);
+    }
   }
 
   // Add parent classes that don't conflict
   for (const cls of parentParsed.classes) {
     if (POSITION_TYPE_CLASSES.includes(cls)) continue;
-    const base = cls.split("-")[0].split("[")[0];
-    if (!seenBases.has(base)) {
-      mergedClasses.push(cls);
-      seenBases.add(base);
+
+    // Skip duplicates
+    if (seenClasses.has(cls)) continue;
+
+    // Check for conflict group
+    const conflictGroup = getConflictGroup(cls);
+    if (conflictGroup && seenConflictGroups.has(conflictGroup)) {
+      continue; // Child already has a class in this conflict group
+    }
+
+    // Check for semantic conflict (e.g., justify-center vs text-left)
+    if (hasSemanticConflict(cls, allChildClasses)) {
+      continue; // Skip parent class due to semantic conflict
+    }
+
+    mergedClasses.push(cls);
+    seenClasses.add(cls);
+    if (conflictGroup) {
+      seenConflictGroups.add(conflictGroup);
     }
   }
 
@@ -283,10 +399,45 @@ export function optimizeNestedDivs(code: string): string {
           const childClassName = extractClassName(child);
           if (childClassName === null) return;
 
-          const mergedClassName = outerClassName + (childClassName ? " " + childClassName : "");
+          const childStyle = extractStyleEntries(child);
+          if (childStyle === null) return;
+
+          // Use proper class merging with conflict resolution
+          // Here outer (div) is parent, inner (span) is child
+          const {
+            merged: mergedClassName,
+            positions: classPositions,
+            zIndex,
+            width: classWidth,
+            height: classHeight,
+            positionType: classPositionType,
+          } = mergeClassNames(outerClassName, childClassName);
+
+          // Merge styles
+          const stylePositions = sumPositions(outerStyle, childStyle);
+          const {
+            merged: mergedStyle,
+            width: styleWidth,
+            height: styleHeight,
+            positionType: stylePositionType,
+          } = mergeStyles(outerStyle, childStyle);
+
+          // Build final className
+          const finalClassName = buildMergedClassName(
+            mergedClassName,
+            classPositions,
+            stylePositions,
+            zIndex,
+            classWidth,
+            classHeight,
+            styleWidth,
+            styleHeight,
+            classPositionType,
+            stylePositionType
+          );
 
           // Build new span element
-          const newAttrs = buildMergedAttributes(mergedClassName, outerStyle);
+          const newAttrs = buildMergedAttributes(finalClassName, mergedStyle);
           const newSpan = b.jsxElement(
             b.jsxOpeningElement(b.jsxIdentifier("span"), newAttrs, false),
             b.jsxClosingElement(b.jsxIdentifier("span")),
