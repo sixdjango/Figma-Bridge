@@ -112,6 +112,51 @@ function hasSemanticConflict(parentClass: string, childClasses: string[]): boole
   return false;
 }
 
+const TEXT_ALIGN_CLASSES = ["text-left", "text-right", "text-center", "text-justify"];
+const JUSTIFY_CLASSES = ["justify-center", "justify-start", "justify-end", "justify-between", "justify-around", "justify-evenly"];
+const ITEMS_CLASSES = ["items-center", "items-start", "items-end", "items-baseline", "items-stretch"];
+const FLEX_COL_CLASSES = ["flex-col", "flex-col-reverse"];
+
+/**
+ * Post-process merged classes to handle conditional semantic conflicts
+ * This runs after all classes are merged to check combined conditions
+ *
+ * Rules:
+ * 1. If child has text-left/text-right AND merged has flex + flex-col → remove items-*
+ * 2. If child has text-left/text-right AND merged has flex (no flex-col) → remove justify-*
+ */
+function postProcessMergedClasses(mergedClasses: string[], childClasses: string[]): string[] {
+  // Check if child has text alignment class
+  const hasTextAlign = childClasses.some((cls) => TEXT_ALIGN_CLASSES.includes(cls));
+  if (!hasTextAlign) {
+    return mergedClasses;
+  }
+
+  // Check flex direction in merged result
+  const hasFlex = mergedClasses.includes("flex") || mergedClasses.includes("inline-flex");
+  const hasFlexCol = mergedClasses.some((cls) => FLEX_COL_CLASSES.includes(cls));
+
+  if (!hasFlex) {
+    return mergedClasses;
+  }
+
+  // Apply conditional removal
+  return mergedClasses.filter((cls) => {
+    if (hasFlexCol) {
+      // flex + flex-col (vertical): text alignment conflicts with items-*
+      if (ITEMS_CLASSES.includes(cls)) {
+        return false;
+      }
+    } else {
+      // flex only (horizontal): text alignment conflicts with justify-*
+      if (JUSTIFY_CLASSES.includes(cls)) {
+        return false;
+      }
+    }
+    return true;
+  });
+}
+
 /**
  * Merge two className strings with position summing
  * Child classes have priority over parent classes
@@ -195,8 +240,11 @@ function mergeClassNames(parentClass: string, childClass: string): MergedClassRe
     }
   }
 
+  // Post-process: handle conditional semantic conflicts (text-align vs flex layout)
+  const finalClasses = postProcessMergedClasses(mergedClasses, allChildClasses);
+
   return {
-    merged: mergedClasses.join(" "),
+    merged: finalClasses.join(" "),
     positions,
     zIndex,
     width,

@@ -98,12 +98,10 @@ export const CONFLICT_GROUPS: readonly string[][] = [
 
 /**
  * Semantic conflicts - parent class should be removed when child has conflicting class
+ * Note: justify/items vs text-align conflicts are handled conditionally in postProcessMergedClasses
+ * based on flex direction (horizontal vs vertical layout)
  */
 export const SEMANTIC_CONFLICTS: readonly { parent: readonly string[]; child: readonly string[] }[] = [
-  {
-    parent: ["justify-center", "justify-start", "justify-end", "justify-between", "justify-around", "justify-evenly"],
-    child: ["text-left", "text-center", "text-right", "text-justify"],
-  },
   {
     parent: ["items-center", "items-start", "items-end", "items-baseline", "items-stretch"],
     child: ["self-auto", "self-start", "self-end", "self-center", "self-stretch", "self-baseline"],
