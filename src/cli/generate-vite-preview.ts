@@ -17,7 +17,7 @@ import path from 'path';
 import { generateViteComponents } from '../generate/vite';
 
 // Configuration
-const MOCK_FILE = path.join(process.cwd(), 'examples/mock/complex_demo.json');
+const MOCK_FILE = path.join(process.cwd(), 'examples/mock/component_demo_composition.json');
 const OUTPUT_DIR = path.join(process.cwd(), 'examples/vite/src/generated');
 const TEMP_IMAGES_DIR = path.join(process.cwd(), 'temp', 'images');
 const TEMP_SVGS_DIR = path.join(process.cwd(), 'temp', 'svgs');
@@ -43,6 +43,7 @@ async function main() {
       // Remove debug data attributes (data-node-id, etc.) in production
       // Set to true to keep them for debugging
       debug: false,
+      optimizeOutput: true,
       // Format output code
       formatOutput: true,
       logger: {

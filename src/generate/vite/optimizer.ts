@@ -24,10 +24,25 @@ interface ParsedStyleEntry {
 }
 
 /**
+ * Check if style content contains spread syntax or dynamic expressions
+ */
+function hasSpreadOrDynamicSyntax(styleContent: string): boolean {
+  const trimmed = styleContent.trim();
+  if (trimmed.includes("...")) return true;
+  if (/[^"']\b[a-zA-Z_]\w*\b[^"':,]/.test(trimmed)) return true;
+  return false;
+}
+
+/**
  * Parse style object content into key-value pairs
  * Handles both quoted and unquoted keys: { 'key': "value" } or { key: "value" }
+ * Returns null if the style contains spread syntax or dynamic expressions
  */
-function parseStyleContent(styleContent: string): ParsedStyleEntry[] {
+function parseStyleContent(styleContent: string): ParsedStyleEntry[] | null {
+  if (hasSpreadOrDynamicSyntax(styleContent)) {
+    return null;
+  }
+
   const result: ParsedStyleEntry[] = [];
   let pos = 0;
   const content = styleContent.trim();
@@ -62,8 +77,19 @@ function parseStyleContent(styleContent: string): ParsedStyleEntry[] {
 
     if (!key) break;
 
-    // Skip whitespace and colon
-    while (pos < content.length && /[\s:]/.test(content[pos])) pos++;
+    // Skip whitespace
+    while (pos < content.length && /\s/.test(content[pos])) pos++;
+
+    // Must have a colon after key
+    if (pos >= content.length || content[pos] !== ":") {
+      while (pos < content.length && content[pos] !== ",") pos++;
+      while (pos < content.length && /[\s,]/.test(content[pos])) pos++;
+      continue;
+    }
+    pos++;
+
+    // Skip whitespace after colon
+    while (pos < content.length && /\s/.test(content[pos])) pos++;
     if (pos >= content.length) break;
 
     // Parse value
@@ -335,10 +361,15 @@ function convertStylesToTailwind(content: string): string {
   result = result.replace(
     elementPattern,
     (match, tagStart, attrsBeforeStyle, existingClasses, styleContent, attrsAfterStyle) => {
+      const styleProps = parseStyleContent(styleContent);
+
+      // Skip if style contains spread syntax or dynamic expressions
+      if (styleProps === null) {
+        return match;
+      }
+
       const tailwindClasses: string[] = [];
       const remainingStyles: ParsedStyleEntry[] = [];
-
-      const styleProps = parseStyleContent(styleContent);
 
       for (const { key, value } of styleProps) {
         const twClass = styleToTailwind(key, value, existingClasses);
@@ -746,9 +777,22 @@ function serializeStyle(style: ParsedStyle): string {
 }
 
 /**
- * Extract className from attributes
+ * Check if attributes contain dynamic expressions that shouldn't be merged
  */
-function extractClassNameFromAttrs(attrs: string): string {
+function hasDynamicAttributes(attrs: string): boolean {
+  if (/className=\{[^}]*\?[^}]*\}/.test(attrs)) return true;
+  if (/style=\{\{[^}]*\.\.\.[^}]*\}\}/.test(attrs)) return true;
+  if (/\{\.\.\.[\w]+\}/.test(attrs)) return true;
+  return false;
+}
+
+/**
+ * Extract className from attributes
+ * Returns null if the className is dynamic
+ */
+function extractClassNameFromAttrs(attrs: string): string | null {
+  if (hasDynamicAttributes(attrs)) return null;
+
   const normalized = attrs.replace(/\s+/g, " ");
   const simpleMatch = normalized.match(/className="([^"]*)"/);
   if (simpleMatch) return simpleMatch[1];
@@ -1106,33 +1150,24 @@ function buildMergedElement(
 }
 
 /**
- * Check if a position is inside a JSX prop expression like prefix={...} or label={...}
+ * Check if a div is the ROOT element of a JSX prop expression like prefix={<div>...}
+ * This only returns true for the direct root element, not nested elements inside.
+ * We allow merging nested divs inside props, just not removing the root element entirely.
  */
-function isInsideJsxProp(content: string, pos: number): boolean {
-  let depth = 0;
+function isJsxPropRootElement(content: string, pos: number): boolean {
+  // Look backwards to find if this is immediately after ={
   let i = pos - 1;
 
-  while (i >= 0) {
-    const char = content[i];
+  // Skip whitespace/newlines
+  while (i >= 0 && /[\s\n\r]/.test(content[i])) i--;
 
-    if (char === "}") {
-      depth++;
-    } else if (char === "{") {
-      depth--;
-      if (depth < 0) {
-        let j = i - 1;
-        while (j >= 0 && /\s/.test(content[j])) j--;
-        if (j >= 0 && content[j] === "=") {
-          return true;
-        }
-        depth = 0;
-      }
-    } else if (char === "<" && depth === 0) {
-      return false;
-    } else if (char === ">" && depth === 0) {
-      return false;
+  // Check if we hit { preceded by =
+  if (i >= 0 && content[i] === "{") {
+    let j = i - 1;
+    while (j >= 0 && /\s/.test(content[j])) j--;
+    if (j >= 0 && content[j] === "=") {
+      return true;
     }
-    i--;
   }
 
   return false;
@@ -1156,10 +1191,8 @@ function optimizeNestedDivs(content: string): string {
     while ((match = divPattern.exec(result)) !== null) {
       const outerStart = match.index;
 
-      // Skip divs that are inside JSX prop expressions
-      if (isInsideJsxProp(result, outerStart)) {
-        continue;
-      }
+      // Note: We allow merging divs inside JSX props, as long as we keep one div
+      // isJsxPropRootElement is used elsewhere if needed, but merging is safe
 
       const openTagEnd = findOpenTagEnd(result, outerStart + 5);
       if (openTagEnd === -1) continue;
@@ -1176,6 +1209,9 @@ function optimizeNestedDivs(content: string): string {
       const spanCheck = isTextOnlySpan(child);
       if (spanCheck.isMatch) {
         const outerClassName = extractClassNameFromAttrs(outerAttrs);
+        // Skip if outer has dynamic attributes
+        if (outerClassName === null) continue;
+
         const outerStyle = extractStyleFromAttrs(outerAttrs);
         const mergedClassName =
           outerClassName + (spanCheck.className ? " " + spanCheck.className : "");
@@ -1205,78 +1241,346 @@ function optimizeNestedDivs(content: string): string {
         const innerDivContent = child.slice(innerOpenEnd + 1, innerCloseStart);
         const innerChild = getSingleChild(innerDivContent);
 
-        if (innerChild && (isComponent(innerChild) || innerChild.startsWith("<div "))) {
-          const outerClassName = extractClassNameFromAttrs(outerAttrs);
-          const innerClassName = extractClassNameFromAttrs(innerDivAttrs);
-          const outerStyle = extractStyleFromAttrs(outerAttrs);
-          const innerStyle = extractStyleFromAttrs(innerDivAttrs);
+        // Check if we can merge outer and inner divs
+        const outerClassName = extractClassNameFromAttrs(outerAttrs);
+        const innerClassName = extractClassNameFromAttrs(innerDivAttrs);
 
-          if (
-            hasPercentagePosition(innerStyle) ||
-            hasPercentagePositionInClassName(innerClassName)
-          ) {
-            continue;
-          }
+        // Skip if either has dynamic attributes
+        if (outerClassName === null || innerClassName === null) continue;
 
-          if (
-            isRelativeAbsolutePattern(outerClassName, outerStyle, innerClassName, innerStyle)
-          ) {
-            continue;
-          }
+        const outerStyle = extractStyleFromAttrs(outerAttrs);
+        const innerStyle = extractStyleFromAttrs(innerDivAttrs);
 
-          const {
-            merged: mergedClassName,
-            positions: classPositions,
-            zIndex,
-            width: classWidth,
-            height: classHeight,
-            positionType: classPositionType,
-          } = mergeClassNames(outerClassName, innerClassName);
-
-          const stylePositions: Record<string, number> = {};
-          for (const prop of POSITION_PROPS) {
-            const outerVal = outerStyle[prop] ? extractPxValue(outerStyle[prop]) : null;
-            const innerVal = innerStyle[prop] ? extractPxValue(innerStyle[prop]) : null;
-            if (outerVal !== null || innerVal !== null) {
-              stylePositions[prop] = (outerVal || 0) + (innerVal || 0);
-            }
-          }
-
-          const {
-            merged: mergedStyle,
-            width: styleWidth,
-            height: styleHeight,
-            positionType: stylePositionType,
-          } = mergeStyles(outerStyle, innerStyle);
-
-          const lineStart = result.lastIndexOf("\n", outerStart) + 1;
-          const indent = result.slice(lineStart, outerStart);
-
-          const merged = buildMergedElement(
-            mergedClassName,
-            classPositions,
-            stylePositions,
-            zIndex,
-            classWidth,
-            classHeight,
-            styleWidth,
-            styleHeight,
-            classPositionType,
-            stylePositionType,
-            mergedStyle,
-            innerChild,
-            indent
-          );
-
-          result = result.slice(0, outerStart) + merged + result.slice(closeStart + 6);
-          foundMatch = true;
-          break;
+        if (
+          hasPercentagePosition(innerStyle) ||
+          hasPercentagePositionInClassName(innerClassName)
+        ) {
+          continue;
         }
+
+        if (
+          isRelativeAbsolutePattern(outerClassName, outerStyle, innerClassName, innerStyle)
+        ) {
+          continue;
+        }
+
+        // Determine what content to keep inside the merged div
+        // If inner div has single child (component or div), use that
+        // Otherwise, keep all inner content
+        const contentToKeep = (innerChild && (isComponent(innerChild) || innerChild.startsWith("<div ")))
+          ? innerChild
+          : innerDivContent.trim();
+
+        // Skip if no content to keep
+        if (!contentToKeep) continue;
+
+        const {
+          merged: mergedClassName,
+          positions: classPositions,
+          zIndex,
+          width: classWidth,
+          height: classHeight,
+          positionType: classPositionType,
+        } = mergeClassNames(outerClassName, innerClassName);
+
+        const stylePositions: Record<string, number> = {};
+        for (const prop of POSITION_PROPS) {
+          const outerVal = outerStyle[prop] ? extractPxValue(outerStyle[prop]) : null;
+          const innerVal = innerStyle[prop] ? extractPxValue(innerStyle[prop]) : null;
+          if (outerVal !== null || innerVal !== null) {
+            stylePositions[prop] = (outerVal || 0) + (innerVal || 0);
+          }
+        }
+
+        const {
+          merged: mergedStyle,
+          width: styleWidth,
+          height: styleHeight,
+          positionType: stylePositionType,
+        } = mergeStyles(outerStyle, innerStyle);
+
+        const lineStart = result.lastIndexOf("\n", outerStart) + 1;
+        const indent = result.slice(lineStart, outerStart);
+
+        const merged = buildMergedElement(
+          mergedClassName,
+          classPositions,
+          stylePositions,
+          zIndex,
+          classWidth,
+          classHeight,
+          styleWidth,
+          styleHeight,
+          classPositionType,
+          stylePositionType,
+          mergedStyle,
+          contentToKeep,
+          indent
+        );
+
+        result = result.slice(0, outerStart) + merged + result.slice(closeStart + 6);
+        foundMatch = true;
+        break;
       }
     }
 
     if (!foundMatch) break;
   }
+
+  return result;
+}
+
+// ============================================================================
+// Root Merge Optimization (baseClassName/baseStyle pattern)
+// ============================================================================
+
+/**
+ * Class conflict groups - classes in the same group are mutually exclusive
+ */
+const CONFLICT_GROUPS: string[][] = [
+  ["justify-center", "justify-start", "justify-end", "justify-between", "justify-around", "justify-evenly"],
+  ["items-center", "items-start", "items-end", "items-baseline", "items-stretch"],
+  ["self-auto", "self-start", "self-end", "self-center", "self-stretch", "self-baseline"],
+  ["text-left", "text-center", "text-right", "text-justify"],
+  ["absolute", "relative", "fixed", "sticky", "static"],
+  ["flex", "block", "inline", "inline-block", "inline-flex", "grid", "inline-grid", "hidden"],
+  ["flex-row", "flex-col", "flex-row-reverse", "flex-col-reverse"],
+  ["flex-wrap", "flex-nowrap", "flex-wrap-reverse"],
+  ["overflow-auto", "overflow-hidden", "overflow-visible", "overflow-scroll"],
+  ["font-thin", "font-extralight", "font-light", "font-normal", "font-medium", "font-semibold", "font-bold", "font-extrabold", "font-black"],
+];
+
+/**
+ * Semantic conflicts - parent class should be removed when child has conflicting class
+ */
+const SEMANTIC_CONFLICTS: Array<{ parent: string[]; child: string[] }> = [
+  {
+    parent: ["justify-center", "justify-start", "justify-end", "justify-between", "justify-around", "justify-evenly"],
+    child: ["text-left", "text-center", "text-right", "text-justify"],
+  },
+  {
+    parent: ["items-center", "items-start", "items-end", "items-baseline", "items-stretch"],
+    child: ["self-auto", "self-start", "self-end", "self-center", "self-stretch", "self-baseline"],
+  },
+];
+
+/**
+ * Get conflict group for a class
+ */
+function getConflictGroupForClass(className: string): string | null {
+  const baseClass = className.replace(/\[.*\]$/, "").replace(/-$/, "");
+
+  for (const group of CONFLICT_GROUPS) {
+    if (group.includes(className) || group.some(g => baseClass === g || className.startsWith(g + "-"))) {
+      return group.join(",");
+    }
+  }
+
+  // Handle dynamic classes
+  const prefixes = ["w-", "h-", "min-w-", "max-w-", "min-h-", "max-h-", "top-", "bottom-", "left-", "right-",
+    "z-", "gap-", "gap-x-", "gap-y-", "p-", "px-", "py-", "pt-", "pb-", "pl-", "pr-",
+    "m-", "mx-", "my-", "mt-", "mb-", "ml-", "mr-", "rounded", "opacity-", "bg-", "leading-", "shadow"];
+
+  for (const prefix of prefixes) {
+    if (className.startsWith(prefix) || className === prefix.replace(/-$/, "")) {
+      return prefix;
+    }
+  }
+
+  // Text size vs text color
+  if (className.startsWith("text-") && !["text-left", "text-center", "text-right", "text-justify"].includes(className)) {
+    if (/^text-(xs|sm|base|lg|xl|2xl|3xl|4xl|5xl|6xl|7xl|8xl|9xl)$/.test(className) || /^text-\[.*\]$/.test(className)) {
+      return "text-size-";
+    }
+    return "text-color-";
+  }
+
+  return null;
+}
+
+/**
+ * Check for semantic conflict between parent and child classes
+ */
+function hasSemanticConflictForMerge(parentClass: string, childClasses: string[]): boolean {
+  for (const conflict of SEMANTIC_CONFLICTS) {
+    const parentMatches = conflict.parent.some(p => parentClass === p || parentClass.startsWith(p.replace(/-$/, "") + "-"));
+    if (parentMatches) {
+      const childMatches = childClasses.some(cc =>
+        conflict.child.some(c => cc === c || cc.startsWith(c.replace(/-$/, "") + "-"))
+      );
+      if (childMatches) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Merge class lists with conflict resolution (child priority)
+ */
+function mergeClassesForRoot(parentClasses: string[], childClasses: string[]): string[] {
+  const result: string[] = [];
+  const childSet = new Set(childClasses);
+
+  const childConflictGroups = new Set<string>();
+  for (const cc of childClasses) {
+    const group = getConflictGroupForClass(cc);
+    if (group) childConflictGroups.add(group);
+  }
+
+  for (const pc of parentClasses) {
+    if (childSet.has(pc)) continue;
+
+    const parentGroup = getConflictGroupForClass(pc);
+    if (parentGroup && childConflictGroups.has(parentGroup)) continue;
+    if (hasSemanticConflictForMerge(pc, childClasses)) continue;
+
+    let hasConflict = false;
+    for (const cc of childClasses) {
+      const pg = getConflictGroupForClass(pc);
+      const cg = getConflictGroupForClass(cc);
+      if (pg && cg && pg === cg) {
+        hasConflict = true;
+        break;
+      }
+    }
+
+    if (!hasConflict) result.push(pc);
+  }
+
+  result.push(...childClasses);
+  return result;
+}
+
+/**
+ * Parse style object string to key-value pairs
+ */
+function parseStyleObjectForRoot(styleStr: string): Record<string, string> {
+  const result: Record<string, string> = {};
+  if (!styleStr || styleStr === "{}") return result;
+
+  let content = styleStr.trim();
+  if (content.startsWith("{")) content = content.slice(1);
+  if (content.endsWith("}")) content = content.slice(0, -1);
+  content = content.trim();
+
+  if (!content) return result;
+
+  const regex = /(\w+)\s*:\s*["']([^"']+)["']/g;
+  let match;
+  while ((match = regex.exec(content)) !== null) {
+    result[match[1]] = match[2];
+  }
+
+  return result;
+}
+
+/**
+ * Serialize style object to string
+ */
+function serializeStyleObjectForRoot(style: Record<string, string>): string {
+  const entries = Object.entries(style);
+  if (entries.length === 0) return "{}";
+  return `{${entries.map(([k, v]) => `${k}: "${v}"`).join(", ")}}`;
+}
+
+interface RootDivInfo {
+  className: string;
+  style: Record<string, string>;
+}
+
+/**
+ * Analyze nested div chain for root merge
+ */
+function analyzeRootDivChain(content: string): { chain: RootDivInfo[]; innerContent: string } | null {
+  const chain: RootDivInfo[] = [];
+  let current = content.trim();
+
+  while (true) {
+    const divMatch = current.match(/^<div\s+([^>]*)>([\s\S]*)<\/div>$/);
+    if (!divMatch) break;
+
+    const attrs = divMatch[1];
+    const inner = divMatch[2].trim();
+
+    if (attrs.includes("{...") || (attrs.includes("className={") && attrs.includes("?"))) break;
+
+    const classMatch = ("<div " + attrs + ">").match(/className="([^"]*)"/);
+    const styleMatch = ("<div " + attrs + ">").match(/style=\{\{([^}]*)\}\}/);
+
+    chain.push({
+      className: classMatch ? classMatch[1] : "",
+      style: styleMatch ? parseStyleObjectForRoot("{" + styleMatch[1] + "}") : {},
+    });
+
+    const singleChildMatch = inner.match(/^(<(?:div|[A-Z])[^>]*>[\s\S]*<\/(?:div|[A-Z][a-zA-Z]*)>|<[A-Z][a-zA-Z0-9]*[^>]*\/>)$/);
+    if (!singleChildMatch) {
+      return { chain, innerContent: inner };
+    }
+
+    if (inner.startsWith("<div ") || inner.startsWith("<div\n")) {
+      current = inner;
+    } else {
+      return { chain, innerContent: inner };
+    }
+  }
+
+  return chain.length > 0 ? { chain, innerContent: current } : null;
+}
+
+/**
+ * Optimize root merge - merge nested divs into baseClassName/baseStyle
+ */
+function optimizeRootMerge(content: string): string {
+  const baseClassNameMatch = content.match(/const\s+baseClassName\s*=\s*["']([^"']*)["']/);
+  const baseStyleMatch = content.match(/const\s+baseStyle\s*=\s*(\{[^}]*\})/);
+
+  if (!baseClassNameMatch || !baseStyleMatch) return content;
+
+  let baseClassName = baseClassNameMatch[1];
+  let baseStyle = parseStyleObjectForRoot(baseStyleMatch[1]);
+
+  const rootDivMatch = content.match(
+    /(<div\s+className=\{className\s*\?\s*`\$\{baseClassName\}[^`]*`\s*:\s*baseClassName\}\s+style=\{\{\s*\.\.\.baseStyle,\s*\.\.\.style\s*\}\}\s+\{\.\.\.props\}\s*>)([\s\S]*?)(<\/div>\s*\);)/
+  );
+
+  if (!rootDivMatch) return content;
+
+  const rootDivOpen = rootDivMatch[1];
+  const rootDivContent = rootDivMatch[2];
+  const rootDivClose = rootDivMatch[3];
+
+  const analysis = analyzeRootDivChain(rootDivContent.trim());
+  if (!analysis || analysis.chain.length === 0) return content;
+
+  let allClasses = baseClassName.split(/\s+/).filter(Boolean);
+  let allStyles = { ...baseStyle };
+
+  for (const div of analysis.chain) {
+    const divClasses = div.className.split(/\s+/).filter(Boolean);
+    allClasses = mergeClassesForRoot(allClasses, divClasses);
+    for (const [key, value] of Object.entries(div.style)) {
+      allStyles[key] = value;
+    }
+  }
+
+  const newBaseClassName = allClasses.join(" ");
+  const newBaseStyle = serializeStyleObjectForRoot(allStyles);
+
+  let result = content;
+  result = result.replace(/const\s+baseClassName\s*=\s*["'][^"']*["']/, `const baseClassName = "${newBaseClassName}"`);
+  result = result.replace(/const\s+baseStyle\s*=\s*\{[^}]*\}/, `const baseStyle = ${newBaseStyle}`);
+
+  const innerContent = analysis.innerContent
+    .split("\n")
+    .map(line => {
+      const trimmed = line.trim();
+      if (!trimmed) return "";
+      return "    " + trimmed;
+    })
+    .filter(line => line.trim())
+    .join("\n");
+
+  result = result.replace(rootDivMatch[0], rootDivOpen + "\n" + innerContent + "\n  " + rootDivClose);
 
   return result;
 }
@@ -1300,6 +1604,8 @@ export interface OptimizeOptions {
   simplifyJsxStrings?: boolean;
   /** Remove outline debug styles */
   removeOutlineStyles?: boolean;
+  /** Merge nested divs into baseClassName/baseStyle */
+  mergeToRoot?: boolean;
 }
 
 const DEFAULT_OPTIONS: OptimizeOptions = {
@@ -1310,6 +1616,7 @@ const DEFAULT_OPTIONS: OptimizeOptions = {
   simplifyColors: true,
   simplifyJsxStrings: true,
   removeOutlineStyles: true,
+  mergeToRoot: false,
 };
 
 /**
@@ -1367,7 +1674,12 @@ export function optimizeReactComponent(
     result = optimizeNestedDivs(result);
   }
 
-  // 10. Final cleanup
+  // 10. Merge nested divs into baseClassName/baseStyle
+  if (opts.mergeToRoot) {
+    result = optimizeRootMerge(result);
+  }
+
+  // 11. Final cleanup
   result = result
     .split("\n")
     .map((line) => line.replace(/\s+$/, ""))
@@ -1376,5 +1688,19 @@ export function optimizeReactComponent(
 
   return result;
 }
+
+// Export individual optimization functions for CLI tools
+export {
+  optimizeNestedDivs,
+  optimizeRootMerge,
+  convertStylesToTailwind,
+  removeIdentityTransforms,
+  removeAutoSizes,
+  removeDuplicateAbsolute,
+  removeOutlineStyles,
+  cleanupEmptyStyles,
+  simplifyColors,
+  simplifyJsxStrings,
+};
 
 export default optimizeReactComponent;
