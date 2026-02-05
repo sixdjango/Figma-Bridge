@@ -9,6 +9,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
+// Use AST-based optimizer
 import { optimizeNestedDivs } from "../generate/vite/optimizer";
 
 /**

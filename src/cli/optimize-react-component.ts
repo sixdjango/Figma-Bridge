@@ -9,7 +9,9 @@
 
 import * as fs from "fs";
 import * as path from "path";
-import { optimizeReactComponent, OptimizeOptions } from "../generate/vite/optimizer";
+// Use AST-based optimizer
+import { optimizeReactComponent } from "../generate/vite/optimizer";
+import type { OptimizeOptions } from "../generate/vite/optimizer";
 
 interface CliOptions extends OptimizeOptions {
   removeDebugClasses?: boolean;
