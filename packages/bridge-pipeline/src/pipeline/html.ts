@@ -307,8 +307,11 @@ function applyCustomComponent(cfg: RenderBoxConfig, def?: CustomComponentDef): v
   }
 
   // When replacing with custom component, remove default 'content-layer' class from wrapper inner element
-  if (def && cfg.options) {
-    cfg.options.innerClassName = '';
+  if (def) {
+    console.log('[DEBUG applyCustomComponent]', { nodeId: def.nodeId, type: def.type, hasOptions: !!cfg.options, ignoreClass: def.ignoreClass });
+    if (cfg.options) {
+      cfg.options.innerClassName = '';
+    }
   }
 
   // Apply ignoreClass filter
@@ -587,7 +590,8 @@ function renderWrapperBox(cfg: RenderBoxConfig): string {
     isText: false,
   });
 
-  const innerClass = opts?.innerClassName || 'content-layer';
+  // Use ?? to allow empty string as valid value (e.g., for custom components)
+  const innerClass = opts?.innerClassName ?? 'content-layer';
   let outerClass = className ? `${className} has-wrapper` : 'has-wrapper';
 
   let innerClassExtra = '';

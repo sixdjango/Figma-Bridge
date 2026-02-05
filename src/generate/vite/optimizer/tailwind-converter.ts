@@ -308,11 +308,26 @@ export function convertStylesToTailwind(code: string): string {
         }
       }
 
-      // Need both className and style to convert styles
-      if (!classAttr || !styleAttr) return;
+      // Need style to convert
+      if (!styleAttr) return;
+
+      // If no className, create one for the element
+      let effectiveClassAttr: n.JSXAttribute;
+      if (!classAttr) {
+        // Create a new className attribute with empty string
+        const newClassAttr = b.jsxAttribute(
+          b.jsxIdentifier("className"),
+          b.stringLiteral("")
+        );
+        opening.attributes = opening.attributes || [];
+        opening.attributes.push(newClassAttr);
+        effectiveClassAttr = newClassAttr;
+      } else {
+        effectiveClassAttr = classAttr;
+      }
 
       // className must be a simple string
-      if (!n.StringLiteral.check(classAttr.value)) return;
+      if (!n.StringLiteral.check(effectiveClassAttr.value)) return;
 
       // style must be an expression container with object
       if (!n.JSXExpressionContainer.check(styleAttr.value)) return;
@@ -322,7 +337,7 @@ export function convertStylesToTailwind(code: string): string {
       // Skip if has spread or dynamic values
       if (hasSpreadOrDynamic(styleExpr)) return;
 
-      const existingClasses = classAttr.value.value;
+      const existingClasses = (effectiveClassAttr.value as n.StringLiteral).value;
       const tailwindClasses: string[] = [];
       const remainingProps: typeof styleExpr.properties = [];
 
@@ -363,8 +378,8 @@ export function convertStylesToTailwind(code: string): string {
 
       // Update className
       if (tailwindClasses.length > 0) {
-        const newClasses = existingClasses + " " + tailwindClasses.join(" ");
-        classAttr.value.value = newClasses;
+        const newClasses = (existingClasses ? existingClasses + " " : "") + tailwindClasses.join(" ");
+        (effectiveClassAttr.value as n.StringLiteral).value = newClasses;
       }
 
       // Update or remove style
