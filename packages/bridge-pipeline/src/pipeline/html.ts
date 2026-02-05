@@ -309,6 +309,11 @@ function applyCustomComponent(cfg: RenderBoxConfig, def?: CustomComponentDef): v
   // Apply ignoreClass filter
   if (def?.ignoreClass && def.ignoreClass.length > 0) {
     cfg.className = filterIgnoredClasses(cfg.className, def.ignoreClass);
+    // Store ignoreClass as data attribute for post-processing (e.g., optimizer)
+    const ignoreClassStr = def.ignoreClass.join(',');
+    cfg.customAttributes = cfg.customAttributes
+      ? { ...cfg.customAttributes, 'data-ignore-class': ignoreClassStr }
+      : { 'data-ignore-class': ignoreClassStr };
   }
 
   // Apply ignoreStyle filter

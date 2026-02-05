@@ -262,6 +262,27 @@ function hasSpreadOrDynamic(styleExpr: n.ObjectExpression): boolean {
 }
 
 /**
+ * Check if a tailwind class should be ignored based on data-ignore-class attribute
+ * Returns true if the class should be completely removed (not kept in style either)
+ */
+function shouldIgnoreClass(twClass: string, ignoreClasses: Set<string>): boolean {
+  if (ignoreClasses.size === 0) return false;
+  // Check exact match
+  if (ignoreClasses.has(twClass)) return true;
+  return false;
+}
+
+/**
+ * Parse ignore classes from data-ignore-class attribute
+ */
+function parseIgnoreClasses(opening: n.JSXOpeningElement): Set<string> {
+  const ignoreAttr = findAttribute(opening, "data-ignore-class");
+  if (!ignoreAttr) return new Set();
+  if (!n.StringLiteral.check(ignoreAttr.value)) return new Set();
+  return new Set(ignoreAttr.value.value.split(",").map((s) => s.trim()).filter(Boolean));
+}
+
+/**
  * Convert inline styles to Tailwind classes
  */
 export function convertStylesToTailwind(code: string): string {
@@ -275,7 +296,19 @@ export function convertStylesToTailwind(code: string): string {
       const classAttr = findAttribute(opening, "className");
       const styleAttr = findAttribute(opening, "style");
 
-      // Need both className and style to convert
+      // Parse ignore classes from data-ignore-class attribute
+      const ignoreClasses = parseIgnoreClasses(opening);
+
+      // Always remove data-ignore-class attribute if present
+      if (ignoreClasses.size > 0) {
+        const ignoreAttr = findAttribute(opening, "data-ignore-class");
+        if (ignoreAttr) {
+          const attrs = opening.attributes || [];
+          opening.attributes = attrs.filter((attr) => attr !== ignoreAttr);
+        }
+      }
+
+      // Need both className and style to convert styles
       if (!classAttr || !styleAttr) return;
 
       // className must be a simple string
@@ -316,8 +349,14 @@ export function convertStylesToTailwind(code: string): string {
           // Cannot convert, keep in style
           remainingProps.push(prop);
         } else if (twClass !== "") {
-          // Converted to Tailwind class
-          tailwindClasses.push(twClass);
+          // Check if this class should be ignored - if so, remove entirely (don't keep in style or class)
+          if (shouldIgnoreClass(twClass, ignoreClasses)) {
+            // Skip this style property entirely - it will be removed
+            continue;
+          } else {
+            // Converted to Tailwind class
+            tailwindClasses.push(twClass);
+          }
         }
         // If twClass is "", skip (duplicate or not needed)
       }
