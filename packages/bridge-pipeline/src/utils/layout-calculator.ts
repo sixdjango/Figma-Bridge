@@ -291,7 +291,17 @@ export function computeLayout(
   };
 
   if (flags?.asFlexItem) {
-    const isStretch = computeIsStretch(node?.layoutAlign || 'AUTO', flags?.parentAlignItemsCss);
+    // When parent has explicit non-stretch alignment (e.g., center),
+    // suppress child's self-stretch to avoid overriding the parent's alignment
+    const parentAlign = flags?.parentAlignItemsCss;
+    const parentIsNonStretch = parentAlign && parentAlign !== 'stretch';
+    const suppressStretch = layout.alignSelf === 'stretch' && parentIsNonStretch;
+
+    if (suppressStretch) {
+      layout.alignSelf = undefined;
+    }
+
+    const isStretch = !suppressStretch && computeIsStretch(node?.layoutAlign || 'AUTO', flags?.parentAlignItemsCss);
     if (isStretch) {
       // 文本节点的尺寸应由 textAutoResize 控制，不应被 stretch 破坏
       const axes = flags?.parentAxes || getLayoutAxes('NONE');

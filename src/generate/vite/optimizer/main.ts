@@ -10,6 +10,7 @@ import {
   simplifyColors,
   simplifyJsxStrings,
   cleanupEmptyStyles,
+  removeSelfStretchConflicts,
 } from "./transforms";
 import { convertStylesToTailwind } from "./tailwind-converter";
 import { optimizeNestedDivs } from "./nested-divs";
@@ -76,7 +77,12 @@ export function optimizeReactComponent(
   // 8. Clean up empty styles
   result = cleanupEmptyStyles(result);
 
-  // 9. Optimize nested divs (aggressive)
+  // 9. Remove self-stretch when parent has non-stretch alignment
+  // Must run BEFORE nested-divs merge, otherwise the merge sees
+  // self-stretch vs items-center as a semantic conflict and drops items-center.
+  result = removeSelfStretchConflicts(result);
+
+  // 10. Optimize nested divs (aggressive)
   if (opts.aggressive) {
     result = optimizeNestedDivs(result);
   }

@@ -4,7 +4,7 @@
 
 import * as recast from "recast";
 import { namedTypes as n, builders as b } from "ast-types";
-import { parseCode, printCode, findAttribute } from "./ast-utils";
+import { parseCode, printCode, findAttribute, extractClassName, removeAttribute } from "./ast-utils";
 
 /**
  * Check if a matrix transform is essentially an identity matrix
@@ -311,6 +311,119 @@ export function cleanupEmptyStyles(code: string): string {
         }
       }
       this.traverse(path);
+    },
+  });
+
+  return printCode(ast);
+}
+
+const NON_STRETCH_ALIGNMENTS = ["items-center", "items-start", "items-end", "items-baseline"];
+
+/**
+ * Resolve top-level const string variables (e.g., const baseClassName = "...").
+ */
+function resolveStringConsts(ast: n.File): Record<string, string> {
+  const consts: Record<string, string> = {};
+  recast.visit(ast, {
+    visitVariableDeclaration(path) {
+      if (path.node.kind === "const") {
+        for (const decl of path.node.declarations) {
+          if (
+            n.VariableDeclarator.check(decl) &&
+            n.Identifier.check(decl.id) &&
+            decl.init &&
+            n.StringLiteral.check(decl.init)
+          ) {
+            consts[decl.id.name] = decl.init.value;
+          }
+        }
+      }
+      return false; // top-level only
+    },
+  });
+  return consts;
+}
+
+/**
+ * Resolve effective className classes for a JSX element, including
+ * references to module-level string constants (e.g., baseClassName).
+ */
+function resolveElementClasses(
+  node: n.JSXElement,
+  consts: Record<string, string>
+): string[] | null {
+  // Fast path: literal className
+  const literal = extractClassName(node);
+  if (literal !== null) return literal.split(/\s+/).filter(Boolean);
+
+  // Dynamic path: look for template literal with const references
+  const attr = findAttribute(node.openingElement, "className");
+  if (!attr) return [];
+  if (!n.JSXExpressionContainer.check(attr.value)) return null;
+
+  const expr = attr.value.expression;
+
+  // Handle: className={className ? `${baseClassName} ${className}` : baseClassName}
+  // Both branches reference baseClassName, so resolve that.
+  if (n.ConditionalExpression.check(expr)) {
+    const classes = new Set<string>();
+    for (const branch of [expr.consequent, expr.alternate]) {
+      if (n.TemplateLiteral.check(branch)) {
+        for (const e of branch.expressions) {
+          if (n.Identifier.check(e) && consts[e.name]) {
+            consts[e.name].split(/\s+/).filter(Boolean).forEach((c) => classes.add(c));
+          }
+        }
+        for (const q of branch.quasis) {
+          q.value.raw.split(/\s+/).filter(Boolean).forEach((c) => classes.add(c));
+        }
+      } else if (n.Identifier.check(branch) && consts[branch.name]) {
+        consts[branch.name].split(/\s+/).filter(Boolean).forEach((c) => classes.add(c));
+      }
+    }
+    if (classes.size > 0) return Array.from(classes);
+  }
+
+  return null;
+}
+
+/**
+ * Remove self-stretch from children when parent has non-stretch alignment
+ * (items-center, items-start, items-end, items-baseline).
+ */
+export function removeSelfStretchConflicts(code: string): string {
+  const ast = parseCode(code);
+  const consts = resolveStringConsts(ast);
+
+  recast.visit(ast, {
+    visitJSXElement(path) {
+      this.traverse(path);
+      const node = path.node;
+
+      const parentClasses = resolveElementClasses(node, consts);
+      if (!parentClasses) return;
+
+      const hasNonStretchAlign = parentClasses.some((c) => NON_STRETCH_ALIGNMENTS.includes(c));
+      if (!hasNonStretchAlign) return;
+
+      // Remove self-stretch from direct children
+      for (const child of node.children || []) {
+        if (!n.JSXElement.check(child)) continue;
+        const childAttr = findAttribute(child.openingElement, "className");
+        if (!childAttr) continue;
+
+        if (n.StringLiteral.check(childAttr.value)) {
+          const classes = childAttr.value.value.split(/\s+/);
+          if (classes.includes("self-stretch")) {
+            const filtered = classes.filter((c) => c !== "self-stretch").join(" ");
+            if (filtered) {
+              childAttr.value.value = filtered;
+            } else {
+              removeAttribute(child.openingElement, "className");
+            }
+          }
+        }
+      }
     },
   });
 
