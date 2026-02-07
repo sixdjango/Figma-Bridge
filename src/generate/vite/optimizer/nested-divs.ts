@@ -29,6 +29,101 @@ const POSITION_PROPS = ["left", "top", "right", "bottom"];
 const POSITION_TYPE_CLASSES = ["absolute", "relative", "fixed", "sticky"];
 const PARENT_PRIORITY_PROPS = ["zIndex"];
 
+// ---------- Box-model conflict guard ----------
+// When padding/border from one side is combined with explicit dimensions
+// from the other side, the merged element has a different visual size.
+
+const PADDING_CLASS_RE = /^p[xytblr]?-/;
+
+function hasPadding(className: string, style: ParsedStyleEntry[]): boolean {
+  const classes = className.split(/\s+/).filter(Boolean);
+  if (classes.some((c) => PADDING_CLASS_RE.test(c))) return true;
+  return style.some((e) => e.key === "padding" || e.key.startsWith("padding"));
+}
+
+function hasBorderWidth(className: string, style: ParsedStyleEntry[]): boolean {
+  const classes = className.split(/\s+/).filter(Boolean);
+  if (classes.some((c) => c === "border" || /^border-\d/.test(c) || /^border-\[/.test(c))) return true;
+  return style.some((e) => e.key === "borderWidth" || (e.key === "border" && /\d+px/.test(e.value)));
+}
+
+function hasExplicitDims(className: string, style: ParsedStyleEntry[]): boolean {
+  const parsed = parseClassName(className);
+  if (parsed.width !== null || parsed.height !== null) return true;
+  return style.some((e) => (e.key === "width" || e.key === "height") && e.value !== "auto");
+}
+
+/**
+ * Check if merging would create a box-model conflict.
+ * Padding/border from one side + explicit dimensions from the other
+ * → merged element has different visual size than the original nesting.
+ */
+function hasBoxModelConflict(
+  outerClassName: string, outerStyle: ParsedStyleEntry[],
+  innerClassName: string, innerStyle: ParsedStyleEntry[]
+): boolean {
+  const outerHasBoxMod = hasPadding(outerClassName, outerStyle)
+    || hasBorderWidth(outerClassName, outerStyle);
+  const innerHasBoxMod = hasPadding(innerClassName, innerStyle)
+    || hasBorderWidth(innerClassName, innerStyle);
+  const outerHasDims = hasExplicitDims(outerClassName, outerStyle);
+  const innerHasDims = hasExplicitDims(innerClassName, innerStyle);
+
+  // Outer padding/border + inner dimensions → padding would enlarge or shrink content
+  if (outerHasBoxMod && innerHasDims) return true;
+  // Inner padding/border + outer dimensions → dimensions were for element without padding
+  if (innerHasBoxMod && outerHasDims) return true;
+
+  return false;
+}
+
+// ---------- Positioning conflict guard ----------
+
+function getPositionType(className: string, style: ParsedStyleEntry[]): string | null {
+  const parsed = parseClassName(className);
+  if (parsed.positionType) return parsed.positionType;
+  const posEntry = style.find((e) => e.key === "position");
+  if (posEntry) return posEntry.value;
+  return null;
+}
+
+/**
+ * Check if merging would destroy a positioning context.
+ *
+ * Cases that must block merge:
+ * 1. Outer is relative/sticky + inner is absolute/fixed
+ *    → inner is positioned relative to outer; merge loses the containing block
+ *      and changes the element from in-flow to out-of-flow.
+ * 2. Outer and inner have different position types (e.g., absolute vs relative)
+ *    → child position wins in merge, dropping the outer's position semantics.
+ */
+function hasPositioningConflict(
+  outerClassName: string, outerStyle: ParsedStyleEntry[],
+  innerClassName: string, innerStyle: ParsedStyleEntry[]
+): boolean {
+  const outerPos = getPositionType(outerClassName, outerStyle);
+  const innerPos = getPositionType(innerClassName, innerStyle);
+
+  if (!outerPos || !innerPos) return false;
+
+  // Same position type → safe to merge
+  if (outerPos === innerPos) return false;
+
+  // Outer creates containing block, inner depends on it
+  if ((outerPos === "relative" || outerPos === "sticky")
+    && (innerPos === "absolute" || innerPos === "fixed")) {
+    return true;
+  }
+
+  // Outer is out-of-flow, inner is in-flow → merge would drop the outer's positioning
+  if ((outerPos === "absolute" || outerPos === "fixed")
+    && (innerPos === "relative" || innerPos === "sticky" || innerPos === "static")) {
+    return true;
+  }
+
+  return false;
+}
+
 /**
  * Get conflict group key for a class
  * Returns a unique key if the class belongs to a conflict group
@@ -470,6 +565,12 @@ export function optimizeNestedDivs(code: string): string {
           const childStyle = extractStyleEntries(child);
           if (childStyle === null) return;
 
+          // Skip if padding/border + dimensions conflict
+          if (hasBoxModelConflict(outerClassName, outerStyle, childClassName, childStyle)) return;
+
+          // Skip if position types conflict (e.g., relative parent + absolute child)
+          if (hasPositioningConflict(outerClassName, outerStyle, childClassName, childStyle)) return;
+
           // Use proper class merging with conflict resolution
           // Here outer (div) is parent, inner (span) is child
           const {
@@ -535,6 +636,16 @@ export function optimizeNestedDivs(code: string): string {
 
           // Skip if inner has percentage positioning
           if (hasPercentagePosition(innerStyle) || hasPercentagePositionInClassName(innerClassName)) {
+            return;
+          }
+
+          // Skip if padding/border + dimensions conflict
+          if (hasBoxModelConflict(outerClassName, outerStyle, innerClassName, innerStyle)) {
+            return;
+          }
+
+          // Skip if position types conflict (e.g., relative parent + absolute child)
+          if (hasPositioningConflict(outerClassName, outerStyle, innerClassName, innerStyle)) {
             return;
           }
 
