@@ -11,6 +11,7 @@ import {
   simplifyJsxStrings,
   cleanupEmptyStyles,
   removeSelfStretchConflicts,
+  removeGrowConflicts,
 } from "./transforms";
 import { convertStylesToTailwind } from "./tailwind-converter";
 import { optimizeNestedDivs } from "./nested-divs";
@@ -82,12 +83,19 @@ export function optimizeReactComponent(
   // self-stretch vs items-center as a semantic conflict and drops items-center.
   result = removeSelfStretchConflicts(result);
 
-  // 10. Optimize nested divs (aggressive)
+  // 10. Remove grow when conflicting with explicit main-axis dimension
+  // Must run BEFORE nested-divs merge to catch original parent-child relationships.
+  result = removeGrowConflicts(result);
+
+  // 11. Optimize nested divs (aggressive)
   if (opts.aggressive) {
     result = optimizeNestedDivs(result);
   }
 
-  // 10. Root merge (TODO: implement)
+  // 12. Remove grow conflicts again after merge (merge may create new conflicts)
+  result = removeGrowConflicts(result);
+
+  // 13. Root merge (TODO: implement)
   // if (opts.mergeToRoot) {
   //   result = optimizeRootMerge(result);
   // }

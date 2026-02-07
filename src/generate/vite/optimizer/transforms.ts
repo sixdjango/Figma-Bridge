@@ -429,3 +429,79 @@ export function removeSelfStretchConflicts(code: string): string {
 
   return printCode(ast);
 }
+
+// Classes that imply flex-grow > 0
+const GROW_CLASSES = ["grow", "flex-1", "flex-auto"];
+// Classes that should be removed alongside grow (only when grow is removed)
+const GROW_RELATED_CLASSES = ["shrink", "shrink-0"];
+
+function hasExplicitWidth(cls: string): boolean {
+  return /^w-\[.+\]$/.test(cls) || cls === "w-full" || cls === "w-screen"
+    || /^w-\d+\/\d+$/.test(cls) || /^w-\d+$/.test(cls);
+}
+
+function hasExplicitHeight(cls: string): boolean {
+  return /^h-\[.+\]$/.test(cls) || cls === "h-full" || cls === "h-screen"
+    || /^h-\d+\/\d+$/.test(cls) || /^h-\d+$/.test(cls);
+}
+
+function isFlexColumn(classes: string[]): boolean {
+  return classes.includes("flex-col") || classes.includes("flex-col-reverse");
+}
+
+function isFlexContainer(classes: string[]): boolean {
+  return classes.includes("flex") || classes.includes("inline-flex");
+}
+
+/**
+ * Remove grow/flex-1 from children when it conflicts with explicit dimensions.
+ * - Parent flex-row + child has grow + explicit width → remove grow
+ * - Parent flex-col + child has grow + explicit height → remove grow
+ */
+export function removeGrowConflicts(code: string): string {
+  const ast = parseCode(code);
+  const consts = resolveStringConsts(ast);
+
+  recast.visit(ast, {
+    visitJSXElement(path) {
+      this.traverse(path);
+      const node = path.node;
+
+      const parentClasses = resolveElementClasses(node, consts);
+      if (!parentClasses || !isFlexContainer(parentClasses)) return;
+
+      const isCol = isFlexColumn(parentClasses);
+
+      for (const child of node.children || []) {
+        if (!n.JSXElement.check(child)) continue;
+        const childAttr = findAttribute(child.openingElement, "className");
+        if (!childAttr || !n.StringLiteral.check(childAttr.value)) continue;
+
+        const classes = childAttr.value.value.split(/\s+/);
+        const hasGrow = classes.some((c) => GROW_CLASSES.includes(c));
+        if (!hasGrow) continue;
+
+        // Check for conflicting explicit dimension on main axis
+        const hasMainDim = isCol
+          ? classes.some(hasExplicitHeight)
+          : classes.some(hasExplicitWidth);
+
+        if (!hasMainDim) continue;
+
+        // Remove grow and related flex-item classes
+        const filtered = classes
+          .filter((c) => !GROW_CLASSES.includes(c) && !GROW_RELATED_CLASSES.includes(c)
+            && !/^basis-/.test(c))
+          .join(" ");
+
+        if (filtered) {
+          childAttr.value.value = filtered;
+        } else {
+          removeAttribute(child.openingElement, "className");
+        }
+      }
+    },
+  });
+
+  return printCode(ast);
+}
