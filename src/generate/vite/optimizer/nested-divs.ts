@@ -268,9 +268,110 @@ function isMultiChildOnlyClass(cls: string): boolean {
 
 const MULTI_CHILD_STYLE_PROPS = ["gap", "rowGap", "columnGap"];
 
+// ---------- Dimension-based alignment priority ----------
+// When parent has a fixed dimension on the relevant axis but child doesn't,
+// the parent's alignment class (items-*/justify-*) should be preserved
+// because it was controlling the visual positioning of the content.
+
+/**
+ * Check if a dimension value represents a fixed size (not auto/relative/percentage).
+ */
+function hasFixedDimValue(value: string | null | undefined): boolean {
+  if (!value) return false;
+  if (value === "auto" || value === "fit-content" || value === "min-content" || value === "max-content") return false;
+  if (value.endsWith("%")) return false;
+  return /^-?[\d.]+(px|rem|em)?$/.test(value);
+}
+
+/**
+ * Adjust alignment class priority based on parent/child dimensions.
+ *
+ * Rules:
+ * - flex-row cross-axis = height: parent items-* wins if parent has height, child doesn't
+ * - flex-col cross-axis = width:  parent items-* wins if parent has width, child doesn't
+ * - flex-row main-axis  = width:  parent justify-* wins if parent has width, child doesn't
+ * - flex-col main-axis  = height: parent justify-* wins if parent has height, child doesn't
+ */
+function adjustAlignmentPriority(
+  mergedClasses: string[],
+  parentParsed: ParsedClassName,
+  childParsed: ParsedClassName,
+  outerStyle: ParsedStyleEntry[],
+  innerStyle: ParsedStyleEntry[]
+): string[] {
+  const hasFlex = mergedClasses.includes("flex") || mergedClasses.includes("inline-flex");
+  if (!hasFlex) return mergedClasses;
+
+  // If flex direction changed during merge, axes meanings changed → skip
+  const parentIsCol = parentParsed.classes.some((c) => FLEX_COL_CLASSES.includes(c));
+  const mergedIsCol = mergedClasses.some((c) => FLEX_COL_CLASSES.includes(c));
+  if (parentIsCol !== mergedIsCol) return mergedClasses;
+
+  const isCol = mergedIsCol;
+
+  // Compute dimension flags (from both className and style)
+  const outerHasFixedW = hasFixedDimValue(parentParsed.width)
+    || outerStyle.some((e) => e.key === "width" && hasFixedDimValue(e.value));
+  const outerHasFixedH = hasFixedDimValue(parentParsed.height)
+    || outerStyle.some((e) => e.key === "height" && hasFixedDimValue(e.value));
+  const innerHasFixedW = hasFixedDimValue(childParsed.width)
+    || innerStyle.some((e) => e.key === "width" && hasFixedDimValue(e.value));
+  const innerHasFixedH = hasFixedDimValue(childParsed.height)
+    || innerStyle.some((e) => e.key === "height" && hasFixedDimValue(e.value));
+
+  let result = [...mergedClasses];
+
+  // Cross-axis alignment (items-*)
+  // flex-row: cross = height, flex-col: cross = width
+  const parentHasCrossDim = isCol ? outerHasFixedW : outerHasFixedH;
+  const childHasCrossDim = isCol ? innerHasFixedW : innerHasFixedH;
+
+  if (parentHasCrossDim && !childHasCrossDim) {
+    const parentItemsClass = parentParsed.classes.find((c) => ITEMS_CLASSES.includes(c));
+    if (parentItemsClass) {
+      const idx = result.findIndex((c) => ITEMS_CLASSES.includes(c));
+      if (idx >= 0) {
+        result[idx] = parentItemsClass;
+      }
+    }
+  }
+
+  // Main-axis alignment (justify-*)
+  // flex-row: main = width, flex-col: main = height
+  const parentHasMainDim = isCol ? outerHasFixedH : outerHasFixedW;
+  const childHasMainDim = isCol ? innerHasFixedH : innerHasFixedW;
+
+  if (parentHasMainDim && !childHasMainDim) {
+    const parentJustifyClass = parentParsed.classes.find((c) => JUSTIFY_CLASSES.includes(c));
+    if (parentJustifyClass) {
+      const idx = result.findIndex((c) => JUSTIFY_CLASSES.includes(c));
+      if (idx >= 0) {
+        result[idx] = parentJustifyClass;
+      }
+    }
+  }
+
+  return result;
+}
+
+// Module-level baseFontSize for px↔rem conversion, set by optimizeNestedDivs
+let _baseFontSize = 16;
+
+/**
+ * Convert a CSS value to px using baseFontSize for rem conversion.
+ * Returns null if the unit is not convertible (%, vw, vh, calc, var, etc.)
+ */
+function toPx(value: number, unit: string): number | null {
+  if (unit === "px") return value;
+  if (unit === "rem") return value * _baseFontSize;
+  return null;
+}
+
 /**
  * Sum two CSS position values.
- * Same unit → arithmetic sum; different units → child (b) takes priority.
+ * Same unit → arithmetic sum.
+ * Mixed px/rem → convert to px via baseFontSize, then sum.
+ * Other mixed units or unparseable → child (b) takes priority.
  */
 function sumPositionValues(a: string | undefined, b: string | undefined): string | null {
   if (!a && !b) return null;
@@ -282,24 +383,43 @@ function sumPositionValues(a: string | undefined, b: string | undefined): string
   const bMatch = b.match(/^(-?[\d.]+)([a-z%]*)$/);
 
   if (aMatch && bMatch) {
+    const aVal = parseFloat(aMatch[1]);
+    const bVal = parseFloat(bMatch[1]);
     const aUnit = aMatch[2] || "px";
     const bUnit = bMatch[2] || "px";
+
+    // Same unit → direct sum
     if (aUnit === bUnit) {
-      const sum = parseFloat(aMatch[1]) + parseFloat(bMatch[1]);
+      const sum = aVal + bVal;
       if (sum === 0) return null;
       return `${sum}${aUnit}`;
     }
+
+    // Mixed px/rem → convert both to px, then sum
+    const aPx = toPx(aVal, aUnit);
+    const bPx = toPx(bVal, bUnit);
+    if (aPx !== null && bPx !== null) {
+      const sum = aPx + bPx;
+      if (sum === 0) return null;
+      return `${sum}px`;
+    }
   }
 
-  // Different units or unparseable (calc, var, etc.) → child takes priority
+  // Incompatible units or unparseable (calc, var, %, vw, etc.) → child takes priority
   return b;
 }
 
 /**
  * Merge two className strings with position summing
- * Child classes have priority over parent classes
+ * Child classes have priority over parent classes, except for alignment
+ * classes when parent has fixed dimension on the relevant axis and child doesn't.
  */
-function mergeClassNames(parentClass: string, childClass: string): MergedClassResult {
+function mergeClassNames(
+  parentClass: string,
+  childClass: string,
+  outerStyle?: ParsedStyleEntry[],
+  innerStyle?: ParsedStyleEntry[]
+): MergedClassResult {
   const parentParsed = parseClassName(parentClass);
   const childParsed = parseClassName(childClass);
 
@@ -382,8 +502,13 @@ function mergeClassNames(parentClass: string, childClass: string): MergedClassRe
     }
   }
 
+  // Adjust alignment priority based on parent/child dimensions
+  const adjustedClasses = (outerStyle && innerStyle)
+    ? adjustAlignmentPriority(mergedClasses, parentParsed, childParsed, outerStyle, innerStyle)
+    : mergedClasses;
+
   // Post-process: handle conditional semantic conflicts (text-align vs flex layout)
-  const finalClasses = postProcessMergedClasses(mergedClasses, allChildClasses);
+  const finalClasses = postProcessMergedClasses(adjustedClasses, allChildClasses);
 
   return {
     merged: finalClasses.join(" "),
@@ -572,8 +697,11 @@ function buildMergedAttributes(
 
 /**
  * Optimize nested single-child divs using AST
+ * @param code - React component source code
+ * @param baseFontSize - Base font size for px↔rem conversion (default: 16)
  */
-export function optimizeNestedDivs(code: string): string {
+export function optimizeNestedDivs(code: string, baseFontSize?: number): string {
+  _baseFontSize = baseFontSize ?? 16;
   const ast = parseCode(code);
   let modified = true;
   let iterations = 0;
@@ -628,7 +756,7 @@ export function optimizeNestedDivs(code: string): string {
             width: classWidth,
             height: classHeight,
             positionType: classPositionType,
-          } = mergeClassNames(outerClassName, childClassName);
+          } = mergeClassNames(outerClassName, childClassName, outerStyle, childStyle);
 
           // Check if flex direction changed during merge
           const removeFlexStyles = shouldRemoveFlexStyles(outerClassName);
@@ -705,7 +833,7 @@ export function optimizeNestedDivs(code: string): string {
             width: classWidth,
             height: classHeight,
             positionType: classPositionType,
-          } = mergeClassNames(outerClassName, innerClassName);
+          } = mergeClassNames(outerClassName, innerClassName, outerStyle, innerStyle);
 
           // Check if flex direction changed during merge
           const removeFlexStyles = shouldRemoveFlexStyles(outerClassName);

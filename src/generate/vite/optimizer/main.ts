@@ -89,7 +89,7 @@ export function optimizeReactComponent(
 
   // 11. Optimize nested divs (aggressive)
   if (opts.aggressive) {
-    result = optimizeNestedDivs(result);
+    result = optimizeNestedDivs(result, opts.baseFontSize);
   }
 
   // 12. Remove grow conflicts again after merge (merge may create new conflicts)

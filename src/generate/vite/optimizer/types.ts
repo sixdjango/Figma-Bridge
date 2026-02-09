@@ -63,6 +63,8 @@ export interface OptimizeOptions {
   removeOutlineStyles?: boolean;
   /** Wrap root element with className/style props support */
   wrapWithProps?: boolean;
+  /** Base font size for px↔rem conversion (default: 16) */
+  baseFontSize?: number;
 }
 
 /**

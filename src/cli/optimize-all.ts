@@ -107,6 +107,7 @@ let optimized = optimizeReactComponent(originalContent, {
   simplifyJsxStrings: true,
   removeOutlineStyles: true,
   wrapWithProps: true,
+  baseFontSize: 100
 });
 
 // Handle debug classes removal
