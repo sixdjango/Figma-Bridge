@@ -16,7 +16,6 @@ import {
   getSingleJSXChild,
   isTextOnlySpan,
   parseClassName,
-  extractPxValue,
   hasPercentagePosition,
   hasPercentagePositionInClassName,
   isRelativeAbsolutePattern,
@@ -270,6 +269,33 @@ function isMultiChildOnlyClass(cls: string): boolean {
 const MULTI_CHILD_STYLE_PROPS = ["gap", "rowGap", "columnGap"];
 
 /**
+ * Sum two CSS position values.
+ * Same unit → arithmetic sum; different units → child (b) takes priority.
+ */
+function sumPositionValues(a: string | undefined, b: string | undefined): string | null {
+  if (!a && !b) return null;
+  if (!a) return b!;
+  if (!b) return a;
+
+  // Try to parse both: value + optional unit
+  const aMatch = a.match(/^(-?[\d.]+)([a-z%]*)$/);
+  const bMatch = b.match(/^(-?[\d.]+)([a-z%]*)$/);
+
+  if (aMatch && bMatch) {
+    const aUnit = aMatch[2] || "px";
+    const bUnit = bMatch[2] || "px";
+    if (aUnit === bUnit) {
+      const sum = parseFloat(aMatch[1]) + parseFloat(bMatch[1]);
+      if (sum === 0) return null;
+      return `${sum}${aUnit}`;
+    }
+  }
+
+  // Different units or unparseable (calc, var, etc.) → child takes priority
+  return b;
+}
+
+/**
  * Merge two className strings with position summing
  * Child classes have priority over parent classes
  */
@@ -277,12 +303,12 @@ function mergeClassNames(parentClass: string, childClass: string): MergedClassRe
   const parentParsed = parseClassName(parentClass);
   const childParsed = parseClassName(childClass);
 
-  // Sum positions
-  const positions: Record<string, number> = {};
+  // Merge positions (same-unit sums, different-unit child wins)
+  const positions: Record<string, string> = {};
   for (const prop of POSITION_PROPS) {
-    const sum = (parentParsed.positions[prop] || 0) + (childParsed.positions[prop] || 0);
-    if (sum !== 0) {
-      positions[prop] = sum;
+    const merged = sumPositionValues(parentParsed.positions[prop], childParsed.positions[prop]);
+    if (merged) {
+      positions[prop] = merged;
     }
   }
 
@@ -457,22 +483,21 @@ function mergeStyles(
 
 /**
  * Sum position values from style entries
+ * Handles any CSS unit (px, rem, em, %, vw, vh, etc.)
  */
 function sumPositions(
   parentStyle: ParsedStyleEntry[],
   childStyle: ParsedStyleEntry[]
-): Record<string, number> {
-  const positions: Record<string, number> = {};
+): Record<string, string> {
+  const positions: Record<string, string> = {};
 
   for (const prop of POSITION_PROPS) {
     const parentEntry = parentStyle.find((e) => e.key === prop);
     const childEntry = childStyle.find((e) => e.key === prop);
 
-    const parentVal = parentEntry ? extractPxValue(parentEntry.value) : null;
-    const childVal = childEntry ? extractPxValue(childEntry.value) : null;
-
-    if (parentVal !== null || childVal !== null) {
-      positions[prop] = (parentVal || 0) + (childVal || 0);
+    const merged = sumPositionValues(parentEntry?.value, childEntry?.value);
+    if (merged) {
+      positions[prop] = merged;
     }
   }
 
@@ -484,8 +509,8 @@ function sumPositions(
  */
 function buildMergedClassName(
   mergedClasses: string,
-  classPositions: Record<string, number>,
-  stylePositions: Record<string, number>,
+  classPositions: Record<string, string>,
+  stylePositions: Record<string, string>,
   zIndex: number | null,
   classWidth: string | null,
   classHeight: string | null,
@@ -502,8 +527,8 @@ function buildMergedClassName(
   if (finalPositionType) parts.push(finalPositionType);
 
   for (const prop of POSITION_PROPS) {
-    const sum = (classPositions[prop] || 0) + (stylePositions[prop] || 0);
-    if (sum !== 0) parts.push(`${prop}-[${sum}px]`);
+    const merged = sumPositionValues(classPositions[prop], stylePositions[prop]);
+    if (merged) parts.push(`${prop}-[${merged}]`);
   }
 
   if (zIndex !== null) parts.push(`z-[${zIndex}]`);

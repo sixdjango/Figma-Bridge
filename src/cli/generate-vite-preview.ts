@@ -44,6 +44,9 @@ async function main() {
       // Set to true to keep them for debugging
       debug: false,
       optimizeOutput: true,
+      optimizeOptions: {
+        convertToTailwind: false
+      },
       // Format output code
       formatOutput: true,
       logger: {

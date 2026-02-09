@@ -134,13 +134,9 @@ export function splitHtmlByNodeIds(
     // Get the component name for this slice
     const componentName = sliceNameMap.get(nodeId);
     if (componentName) {
-      // Create placeholder element
+      // Create placeholder element without style/className —
+      // the Slice component already has these in its own root element
       const placeholder = doc.createElement(componentName);
-      // Copy key attributes for positioning
-      const style = element.getAttribute('style');
-      const className = element.getAttribute('class');
-      if (style) placeholder.setAttribute('style', style);
-      if (className) placeholder.setAttribute('className', className);
 
       // Replace the element with placeholder
       element.parentNode?.replaceChild(placeholder, element);

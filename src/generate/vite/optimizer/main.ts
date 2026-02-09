@@ -15,6 +15,7 @@ import {
 } from "./transforms";
 import { convertStylesToTailwind } from "./tailwind-converter";
 import { optimizeNestedDivs } from "./nested-divs";
+import { wrapRootWithProps } from "./wrap-root-props";
 import type { OptimizeOptions } from "./types";
 
 const DEFAULT_OPTIONS: OptimizeOptions = {
@@ -25,7 +26,6 @@ const DEFAULT_OPTIONS: OptimizeOptions = {
   simplifyColors: true,
   simplifyJsxStrings: true,
   removeOutlineStyles: true,
-  mergeToRoot: false,
 };
 
 /**
@@ -95,12 +95,12 @@ export function optimizeReactComponent(
   // 12. Remove grow conflicts again after merge (merge may create new conflicts)
   result = removeGrowConflicts(result);
 
-  // 13. Root merge (TODO: implement)
-  // if (opts.mergeToRoot) {
-  //   result = optimizeRootMerge(result);
-  // }
+  // 13. Wrap root element with className/style props support
+  if (opts.wrapWithProps) {
+    result = wrapRootWithProps(result);
+  }
 
-  // 11. Final cleanup - remove trailing whitespace and extra blank lines
+  // 14. Final cleanup - remove trailing whitespace and extra blank lines
   result = result
     .split("\n")
     .map((line) => line.replace(/\s+$/, ""))

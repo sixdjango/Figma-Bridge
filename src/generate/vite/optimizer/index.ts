@@ -10,5 +10,5 @@ export * from "./ast-utils";
 export * from "./transforms";
 export * from "./tailwind-converter";
 export * from "./nested-divs";
-export * from "./root-merge";
+export * from "./wrap-root-props";
 export { optimizeReactComponent, default } from "./main";

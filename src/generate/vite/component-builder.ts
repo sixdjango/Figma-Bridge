@@ -6,7 +6,7 @@ import fs from 'fs';
 import path from 'path';
 import type { ReactComponentFile, ComponentBuildContext } from './types';
 import { ensureDir } from './utils';
-import { parseJsxRoot, extractCustomComponentImports, buildCustomComponentImportLines } from './jsx-parser';
+import { extractCustomComponentImports, buildCustomComponentImportLines } from './jsx-parser';
 import { convertToLessModule, generateLessImport } from './tailwind-to-less';
 import { optimizeReactComponent, type OptimizeOptions } from './optimizer';
 
@@ -43,49 +43,10 @@ export function buildComponentTsx(context: ComponentBuildContext): string {
   sliceImports.forEach(imp => lines.push(imp));
   lines.push('');
 
-  // Parse root element info for props merging
-  const rootInfo = parseJsxRoot(jsx);
-
-  if (rootInfo) {
-    // Generate component with props support
-    const baseClassNameLiteral = JSON.stringify(rootInfo.className);
-    const baseStyleEntries = Object.entries(rootInfo.style)
-      .map(([k, v]) => `'${k}': ${JSON.stringify(v)}`)
-      .join(', ');
-    const baseStyleLiteral = `{ ${baseStyleEntries} }`;
-
-    // Other attrs
-    const otherAttrsStr = Object.entries(rootInfo.otherAttrs)
-      .map(([k, v]) => `${k}="${v}"`)
-      .join(' ');
-    const otherAttrsPart = otherAttrsStr ? ` ${otherAttrsStr}` : '';
-
-    lines.push(`const baseClassName = ${baseClassNameLiteral};`);
-    lines.push(`const baseStyle = ${baseStyleLiteral};`);
-    lines.push('');
-    lines.push(`interface ${componentName}Props {`);
-    lines.push('  className?: string;');
-    lines.push('  style?: React.CSSProperties;');
-    lines.push('  [key: string]: unknown;');
-    lines.push('}');
-    lines.push('');
-    lines.push(`export const ${componentName}: React.FC<${componentName}Props> = ({ className, style, ...props }) => (`);
-    lines.push(`  <${rootInfo.tag}`);
-    lines.push(`    className={className ? \`\${baseClassName} \${className}\` : baseClassName}`);
-    lines.push(`    style={{ ...baseStyle, ...style }}`);
-    lines.push(`    {...props}${otherAttrsPart}`);
-    lines.push('  >');
-    if (rootInfo.innerJsx) {
-      lines.push(rootInfo.innerJsx);
-    }
-    lines.push(`  </${rootInfo.tag}>`);
-    lines.push(');');
-  } else {
-    // Fallback: simple component without props
-    lines.push(`export const ${componentName}: React.FC = () => (`);
-    lines.push(jsx);
-    lines.push(');');
-  }
+  // Simple component with inline className/style on root element
+  lines.push(`export const ${componentName}: React.FC = () => (`);
+  lines.push(jsx);
+  lines.push(');');
 
   lines.push('');
   lines.push(`export default ${componentName};`);
@@ -142,49 +103,10 @@ export function buildComponentTsxWithImports(context: ComponentBuildContextWithI
   sliceImports.forEach(imp => lines.push(imp));
   lines.push('');
 
-  // Parse root element info for props merging
-  const rootInfo = parseJsxRoot(jsx);
-
-  if (rootInfo) {
-    // Generate component with props support
-    const baseClassNameLiteral = JSON.stringify(rootInfo.className);
-    const baseStyleEntries = Object.entries(rootInfo.style)
-      .map(([k, v]) => `'${k}': ${JSON.stringify(v)}`)
-      .join(', ');
-    const baseStyleLiteral = `{ ${baseStyleEntries} }`;
-
-    // Other attrs
-    const otherAttrsStr = Object.entries(rootInfo.otherAttrs)
-      .map(([k, v]) => `${k}="${v}"`)
-      .join(' ');
-    const otherAttrsPart = otherAttrsStr ? ` ${otherAttrsStr}` : '';
-
-    lines.push(`const baseClassName = ${baseClassNameLiteral};`);
-    lines.push(`const baseStyle = ${baseStyleLiteral};`);
-    lines.push('');
-    lines.push(`interface ${componentName}Props {`);
-    lines.push('  className?: string;');
-    lines.push('  style?: React.CSSProperties;');
-    lines.push('  [key: string]: unknown;');
-    lines.push('}');
-    lines.push('');
-    lines.push(`export const ${componentName}: React.FC<${componentName}Props> = ({ className, style, ...props }) => (`);
-    lines.push(`  <${rootInfo.tag}`);
-    lines.push(`    className={className ? \`\${baseClassName} \${className}\` : baseClassName}`);
-    lines.push(`    style={{ ...baseStyle, ...style }}`);
-    lines.push(`    {...props}${otherAttrsPart}`);
-    lines.push('  >');
-    if (rootInfo.innerJsx) {
-      lines.push(rootInfo.innerJsx);
-    }
-    lines.push(`  </${rootInfo.tag}>`);
-    lines.push(');');
-  } else {
-    // Fallback: simple component without props
-    lines.push(`export const ${componentName}: React.FC = () => (`);
-    lines.push(jsx);
-    lines.push(');');
-  }
+  // Simple component with inline className/style on root element
+  lines.push(`export const ${componentName}: React.FC = () => (`);
+  lines.push(jsx);
+  lines.push(');');
 
   lines.push('');
   lines.push(`export default ${componentName};`);

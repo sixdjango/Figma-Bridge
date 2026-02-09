@@ -15,7 +15,7 @@ export interface ParsedStyleEntry {
  */
 export interface ParsedClassName {
   classes: string[];
-  positions: Record<string, number>; // left, top, right, bottom values
+  positions: Record<string, string>; // left, top, right, bottom values (e.g. "10px", "1.27rem")
   zIndex: number | null;
   width: string | null;
   height: string | null;
@@ -36,7 +36,7 @@ export interface ElementAttributes {
  */
 export interface MergedClassResult {
   merged: string;
-  positions: Record<string, number>;
+  positions: Record<string, string>;
   zIndex: number | null;
   width: string | null;
   height: string | null;
@@ -61,8 +61,8 @@ export interface OptimizeOptions {
   simplifyJsxStrings?: boolean;
   /** Remove outline debug styles */
   removeOutlineStyles?: boolean;
-  /** Merge nested divs into baseClassName/baseStyle */
-  mergeToRoot?: boolean;
+  /** Wrap root element with className/style props support */
+  wrapWithProps?: boolean;
 }
 
 /**

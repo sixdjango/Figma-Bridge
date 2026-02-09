@@ -11,7 +11,6 @@ export {
   default,
   OptimizeOptions,
   optimizeNestedDivs,
-  optimizeRootMerge,
   convertStylesToTailwind,
   removeIdentityTransforms,
   removeAutoSizes,
@@ -20,4 +19,5 @@ export {
   cleanupEmptyStyles,
   simplifyColors,
   simplifyJsxStrings,
+  wrapRootWithProps,
 } from "./optimizer/index";

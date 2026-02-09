@@ -5,15 +5,14 @@
  * This script runs multiple optimization passes using the optimizer module:
  * 1. Clean redundant code (identity transforms, auto sizes, empty divs, etc.)
  * 2. Merge single-child nested divs
- * 3. Merge nested divs into baseClassName/baseStyle (for root components)
- * 4. Final cleanup
+ * 3. Final cleanup
  *
  * Usage: npm run optimize-all -- <path-to-tsx-file> [options]
  */
 
 import * as fs from "fs";
 import * as path from "path";
-import { optimizeReactComponent, optimizeRootMerge } from "../generate/vite/optimizer";
+import { optimizeReactComponent } from "../generate/vite/optimizer";
 
 const DEBUG_CLASS_NAMES = [
   "frame",
@@ -63,8 +62,7 @@ Options:
 This runs the full optimization pipeline:
   1. Clean redundant code (identity transforms, auto sizes, etc.)
   2. Merge nested single-child divs
-  3. Merge into baseClassName/baseStyle (if pattern found)
-  4. Final formatting cleanup
+  3. Final formatting cleanup
 
 Example:
   npm run optimize-all -- examples/vite/src/generated/Layout/index.tsx
@@ -103,12 +101,12 @@ console.log("-".repeat(40));
 let optimized = optimizeReactComponent(originalContent, {
   aggressive: true,
   removeAutoSizes: true,
-  convertToTailwind: true,
+  convertToTailwind: false,
   removeIdentityTransforms: true,
   simplifyColors: true,
   simplifyJsxStrings: true,
   removeOutlineStyles: true,
-  mergeToRoot: false, // We'll do this separately for better logging
+  wrapWithProps: true,
 });
 
 // Handle debug classes removal
@@ -119,21 +117,8 @@ if (hasDebugFlag) {
 
 console.log("  ✓ Basic optimizations complete");
 
-// Step 3: Root merge optimization
-console.log("\nStep 3: Merging into baseClassName/baseStyle...");
-console.log("-".repeat(40));
-
-const beforeRootMerge = optimized;
-optimized = optimizeRootMerge(optimized);
-
-if (optimized !== beforeRootMerge) {
-  console.log("  ✓ Root merge complete");
-} else {
-  console.log("  (No baseClassName/baseStyle pattern found)");
-}
-
-// Step 4: Final cleanup
-console.log("\nStep 4: Final cleanup...");
+// Step 3: Final cleanup
+console.log("\nStep 3: Final cleanup...");
 console.log("-".repeat(40));
 
 // Remove empty lines left by removed divs

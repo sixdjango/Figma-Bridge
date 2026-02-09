@@ -251,7 +251,7 @@ export function extractPxValue(value: string): number | null {
  */
 export function parseClassName(className: string): ParsedClassName {
   const classes = className.split(/\s+/).filter(Boolean);
-  const positions: Record<string, number> = {};
+  const positions: Record<string, string> = {};
   let zIndex: number | null = null;
   let width: string | null = null;
   let height: string | null = null;
@@ -265,9 +265,10 @@ export function parseClassName(className: string): ParsedClassName {
     let isPositionClass = false;
 
     for (const prop of positionProps) {
-      const match = cls.match(new RegExp(`^${prop}-\\[(-?[\\d.]+)px\\]$`));
+      // Match any CSS value: left-[10px], left-[1.27rem], left-[50%], etc.
+      const match = cls.match(new RegExp(`^${prop}-\\[([^\\]]+)\\]$`));
       if (match) {
-        positions[prop] = parseFloat(match[1]);
+        positions[prop] = match[1];
         isPositionClass = true;
         break;
       }
