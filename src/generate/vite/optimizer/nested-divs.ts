@@ -252,6 +252,23 @@ function postProcessMergedClasses(mergedClasses: string[], childClasses: string[
   });
 }
 
+// ---------- Multi-child-only class filter ----------
+// Since we only merge single-child parents, classes that only affect
+// multi-child layouts had no visual effect and must not carry over
+// (they'd incorrectly apply to the inner element's children after merge).
+
+function isMultiChildOnlyClass(cls: string): boolean {
+  // gap between children
+  if (/^gap(-x|-y)?-/.test(cls)) return true;
+  // Tailwind space between children
+  if (/^space-(x|y)-/.test(cls)) return true;
+  // Flex wrap (1 child never wraps)
+  if (cls === "flex-wrap" || cls === "flex-wrap-reverse") return true;
+  return false;
+}
+
+const MULTI_CHILD_STYLE_PROPS = ["gap", "rowGap", "columnGap"];
+
 /**
  * Merge two className strings with position summing
  * Child classes have priority over parent classes
@@ -316,6 +333,10 @@ function mergeClassNames(parentClass: string, childClass: string): MergedClassRe
 
     // Skip duplicates
     if (seenClasses.has(cls)) continue;
+
+    // Skip parent's multi-child-only classes (parent had 1 child → no effect,
+    // but after merge they'd incorrectly apply to the inner element's children)
+    if (isMultiChildOnlyClass(cls)) continue;
 
     // Check for conflict group
     const conflictGroup = getConflictGroup(cls);
@@ -404,6 +425,8 @@ function mergeStyles(
     if (POSITION_PROPS.includes(entry.key)) continue;
     // Skip flex-dependent styles if flex direction changed
     if (removeFlexStyles && FLEX_DEPENDENT_STYLES.includes(entry.key)) continue;
+    // Skip multi-child-only style props from parent (parent had 1 child → no effect)
+    if (MULTI_CHILD_STYLE_PROPS.includes(entry.key)) continue;
     if (seenKeys.has(entry.key)) {
       // Parent priority props
       if (PARENT_PRIORITY_PROPS.includes(entry.key)) {
