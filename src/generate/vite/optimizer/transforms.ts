@@ -96,7 +96,10 @@ export function removeIdentityTransforms(code: string): string {
 }
 
 /**
- * Remove redundant width/height: "auto" from style objects
+ * Remove redundant width/height: "auto" from inline style objects.
+ * Does NOT remove w-auto/h-auto from className — those must survive
+ * until after nested-divs merge so they can override parent dimensions.
+ * Use removeAutoSizeClasses() after merge to clean them up.
  */
 export function removeAutoSizes(code: string): string {
   const ast = parseCode(code);
@@ -119,7 +122,17 @@ export function removeAutoSizes(code: string): string {
     },
   });
 
-  // Also remove w-auto and h-auto from className
+  return printCode(ast);
+}
+
+/**
+ * Remove w-auto and h-auto from className attributes.
+ * Should run AFTER nested-divs merge so that auto classes can
+ * participate in merge conflict resolution first.
+ */
+export function removeAutoSizeClasses(code: string): string {
+  const ast = parseCode(code);
+
   recast.visit(ast, {
     visitJSXAttribute(path) {
       const node = path.node;
