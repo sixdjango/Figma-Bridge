@@ -436,11 +436,8 @@ function mergeClassNames(
   const zIndex = parentParsed.zIndex ?? childParsed.zIndex;
 
   // Child width/height takes priority
-  // If child explicitly has w-auto/h-auto, don't inherit parent's explicit dimension
-  const childHasAutoWidth = childParsed.classes.includes("w-auto");
-  const childHasAutoHeight = childParsed.classes.includes("h-auto");
-  const width = childHasAutoWidth ? null : (childParsed.width ?? parentParsed.width);
-  const height = childHasAutoHeight ? null : (childParsed.height ?? parentParsed.height);
+  const width = childParsed.width ?? parentParsed.width;
+  const height = childParsed.height ?? parentParsed.height;
 
   // Child position type takes priority
   const positionType = childParsed.positionType ?? parentParsed.positionType;
@@ -662,10 +659,10 @@ function buildMergedClassName(
   if (zIndex !== null) parts.push(`z-[${zIndex}]`);
 
   const finalWidth = styleWidth ?? classWidth;
-  if (finalWidth && finalWidth !== "auto") parts.push(`w-[${finalWidth}]`);
+  if (finalWidth) parts.push(`w-[${finalWidth}]`);
 
   const finalHeight = styleHeight ?? classHeight;
-  if (finalHeight && finalHeight !== "auto") parts.push(`h-[${finalHeight}]`);
+  if (finalHeight) parts.push(`h-[${finalHeight}]`);
 
   return parts.join(" ");
 }

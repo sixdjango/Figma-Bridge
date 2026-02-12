@@ -5,7 +5,6 @@
 import {
   removeIdentityTransforms,
   removeAutoSizes,
-  removeAutoSizeClasses,
   removeDuplicateAbsolute,
   removeOutlineStyles,
   simplifyColors,
@@ -48,28 +47,22 @@ export function optimizeReactComponent(
     result = removeIdentityTransforms(result);
   }
 
-  // 2. Remove duplicate position: absolute
+  // 2. Remove redundant auto sizes
+  if (opts.removeAutoSizes) {
+    result = removeAutoSizes(result);
+  }
+
+  // 3. Remove duplicate position: absolute
   result = removeDuplicateAbsolute(result);
 
-  // 3. Remove outline debug styles
+  // 4. Remove outline debug styles
   if (opts.removeOutlineStyles) {
     result = removeOutlineStyles(result);
   }
 
-  // 4. Convert inline styles to Tailwind
-  // This converts width:"auto" → w-auto, height:"auto" → h-auto in className,
-  // which must survive until after merge to participate in conflict resolution.
+  // 5. Convert inline styles to Tailwind
   if (opts.convertToTailwind) {
     result = convertStylesToTailwind(result);
-  }
-
-  // 5. Remove remaining inline width/height:"auto" that weren't converted.
-  // Must run AFTER convertStylesToTailwind but also must preserve auto values
-  // until after merge. When convertToTailwind is enabled, "auto" is already
-  // converted to w-auto/h-auto className. When disabled, we must keep inline
-  // auto values so they can block parent dimensions during merge.
-  if (opts.removeAutoSizes && opts.convertToTailwind) {
-    result = removeAutoSizes(result);
   }
 
   // 6. Simplify colors
@@ -102,18 +95,12 @@ export function optimizeReactComponent(
   // 12. Remove grow conflicts again after merge (merge may create new conflicts)
   result = removeGrowConflicts(result);
 
-  // 13. Remove w-auto/h-auto from className and inline width/height:"auto" (now safe after merge)
-  if (opts.removeAutoSizes) {
-    result = removeAutoSizeClasses(result);
-    result = removeAutoSizes(result);
-  }
-
-  // 14. Wrap root element with className/style props support
+  // 13. Wrap root element with className/style props support
   if (opts.wrapWithProps) {
     result = wrapRootWithProps(result);
   }
 
-  // 15. Final cleanup - remove trailing whitespace and extra blank lines
+  // 14. Final cleanup - remove trailing whitespace and extra blank lines
   result = result
     .split("\n")
     .map((line) => line.replace(/\s+$/, ""))
