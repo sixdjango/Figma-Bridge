@@ -758,6 +758,13 @@ export function optimizeNestedDivs(code: string, baseFontSize?: number): string 
             positionType: classPositionType,
           } = mergeClassNames(outerClassName, childClassName, outerStyle, childStyle);
 
+          // w-auto/h-auto on either side blocks dimension propagation to text spans
+          const allMergedClasses = (outerClassName + " " + childClassName).split(/\s+/);
+          const hasAutoWidth = allMergedClasses.includes("w-auto");
+          const hasAutoHeight = allMergedClasses.includes("h-auto");
+          const effectiveClassWidth = hasAutoWidth ? null : classWidth;
+          const effectiveClassHeight = hasAutoHeight ? null : classHeight;
+
           // Check if flex direction changed during merge
           const removeFlexStyles = shouldRemoveFlexStyles(outerClassName);
 
@@ -770,16 +777,20 @@ export function optimizeNestedDivs(code: string, baseFontSize?: number): string 
             positionType: stylePositionType,
           } = mergeStyles(outerStyle, childStyle, removeFlexStyles);
 
+          // w-auto/h-auto also blocks style-level dimension propagation
+          const effectiveStyleWidth = hasAutoWidth ? null : styleWidth;
+          const effectiveStyleHeight = hasAutoHeight ? null : styleHeight;
+
           // Build final className
           const finalClassName = buildMergedClassName(
             mergedClassName,
             classPositions,
             stylePositions,
             zIndex,
-            classWidth,
-            classHeight,
-            styleWidth,
-            styleHeight,
+            effectiveClassWidth,
+            effectiveClassHeight,
+            effectiveStyleWidth,
+            effectiveStyleHeight,
             classPositionType,
             stylePositionType
           );

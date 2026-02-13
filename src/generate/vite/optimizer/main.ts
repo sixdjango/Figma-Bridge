@@ -5,6 +5,7 @@
 import {
   removeIdentityTransforms,
   removeAutoSizes,
+  removeAutoSizeClasses,
   removeDuplicateAbsolute,
   removeOutlineStyles,
   simplifyColors,
@@ -95,12 +96,15 @@ export function optimizeReactComponent(
   // 12. Remove grow conflicts again after merge (merge may create new conflicts)
   result = removeGrowConflicts(result);
 
-  // 13. Wrap root element with className/style props support
+  // 13. Remove w-auto/h-auto className markers (no longer needed after merge)
+  result = removeAutoSizeClasses(result);
+
+  // 14. Wrap root element with className/style props support
   if (opts.wrapWithProps) {
     result = wrapRootWithProps(result);
   }
 
-  // 14. Final cleanup - remove trailing whitespace and extra blank lines
+  // 15. Final cleanup - remove trailing whitespace and extra blank lines
   result = result
     .split("\n")
     .map((line) => line.replace(/\s+$/, ""))

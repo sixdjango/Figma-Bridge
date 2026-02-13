@@ -96,30 +96,83 @@ export function removeIdentityTransforms(code: string): string {
 }
 
 /**
- * Remove redundant width/height: "auto" from style objects
+ * Convert inline width/height: "auto" to className markers (w-auto/h-auto).
+ * The className markers survive until after nested-div merge, where they
+ * block parent dimension propagation, then get cleaned up by removeAutoSizeClasses.
  */
 export function removeAutoSizes(code: string): string {
   const ast = parseCode(code);
 
+  // Track which elements need w-auto / h-auto added to className
+  const elementsToMark = new Map<n.JSXOpeningElement, Set<string>>();
+
   recast.visit(ast, {
-    visitObjectProperty(path) {
-      const node = path.node;
-      const keyName = getPropertyKeyName(node);
-
-      if (
-        (keyName === "width" || keyName === "height") &&
-        n.StringLiteral.check(node.value) &&
-        node.value.value === "auto"
-      ) {
-        path.prune();
-        return false;
-      }
-
+    visitJSXElement(path) {
       this.traverse(path);
+      const opening = path.node.openingElement;
+      const styleAttr = findAttribute(opening, "style");
+      if (!styleAttr || !n.JSXExpressionContainer.check(styleAttr.value)) return;
+      const expr = styleAttr.value.expression;
+      if (!n.ObjectExpression.check(expr)) return;
+
+      const toAdd = new Set<string>();
+      expr.properties = expr.properties.filter((prop) => {
+        if (n.ObjectProperty.check(prop)) {
+          const keyName = getPropertyKeyName(prop);
+          if (
+            keyName === "width" &&
+            n.StringLiteral.check(prop.value) &&
+            prop.value.value === "auto"
+          ) {
+            toAdd.add("w-auto");
+            return false;
+          }
+          if (
+            keyName === "height" &&
+            n.StringLiteral.check(prop.value) &&
+            prop.value.value === "auto"
+          ) {
+            toAdd.add("h-auto");
+            return false;
+          }
+        }
+        return true;
+      });
+
+      if (toAdd.size > 0) {
+        elementsToMark.set(opening, toAdd);
+      }
     },
   });
 
-  // Also remove w-auto and h-auto from className
+  // Add w-auto/h-auto to className for elements that had inline auto
+  elementsToMark.forEach((classes, opening) => {
+    const classAttr = findAttribute(opening, "className");
+    if (classAttr && n.StringLiteral.check(classAttr.value)) {
+      const existing = classAttr.value.value.split(/\s+/).filter(Boolean);
+      classes.forEach((cls) => {
+        if (!existing.includes(cls)) existing.push(cls);
+      });
+      classAttr.value.value = existing.join(" ");
+    } else if (!classAttr && opening.attributes) {
+      opening.attributes.push(
+        b.jsxAttribute(
+          b.jsxIdentifier("className"),
+          b.stringLiteral(Array.from(classes).join(" "))
+        )
+      );
+    }
+  });
+
+  return printCode(ast);
+}
+
+/**
+ * Remove w-auto and h-auto className markers (post-merge cleanup).
+ */
+export function removeAutoSizeClasses(code: string): string {
+  const ast = parseCode(code);
+
   recast.visit(ast, {
     visitJSXAttribute(path) {
       const node = path.node;
