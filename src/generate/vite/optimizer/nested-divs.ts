@@ -747,6 +747,20 @@ export function optimizeNestedDivs(code: string, baseFontSize?: number): string 
           // Skip if position types conflict (e.g., relative parent + absolute child)
           if (hasPositioningConflict(outerClassName, outerStyle, childClassName, childStyle)) return;
 
+          // Skip if parent has structural fixed dimensions that would be lost due to w-auto/h-auto blocking
+          {
+            const preClasses = (outerClassName + " " + childClassName).split(/\s+/);
+            const outerParsedPre = parseClassName(outerClassName);
+            const outerStyleWidth = outerStyle.find(e => e.key === "width")?.value;
+            const outerStyleHeight = outerStyle.find(e => e.key === "height")?.value;
+            const hasFixedOuterW = hasFixedDimValue(outerParsedPre.width) || hasFixedDimValue(outerStyleWidth);
+            const hasFixedOuterH = hasFixedDimValue(outerParsedPre.height) || hasFixedDimValue(outerStyleHeight);
+            if ((preClasses.includes("w-auto") && hasFixedOuterW) ||
+                (preClasses.includes("h-auto") && hasFixedOuterH)) {
+              return;
+            }
+          }
+
           // Use proper class merging with conflict resolution
           // Here outer (div) is parent, inner (span) is child
           const {
