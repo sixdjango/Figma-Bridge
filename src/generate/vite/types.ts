@@ -45,8 +45,13 @@ export interface AssetIndexEntry {
 export interface ViteGeneratorOptions {
   /** Input Figma JSON data or file path */
   input: string | object;
-  /** Output directory for generated components */
-  outputDir: string;
+  /**
+   * Output directory for generated components.
+   * When omitted, files are generated to a temporary directory, automatically
+   * zipped into memory, and the temp directory is cleaned up. The ZIP buffer
+   * is returned in the result's `zipBuffer` field.
+   */
+  outputDir?: string;
   /** Directory for assets output */
   assetsDir?: string;
   /** Directory containing temporary images */
@@ -142,14 +147,16 @@ export interface ViteGeneratorResult {
   /** Layout component info */
   layout: {
     name: string;
-    path: string;
+    /** Undefined when outputDir was not provided (memory-only mode) */
+    path?: string;
     width: number;
     height: number;
   };
   /** Slice components info */
   slices: Array<{
     name: string;
-    path: string;
+    /** Undefined when outputDir was not provided (memory-only mode) */
+    path?: string;
     width: number;
     height: number;
   }>;

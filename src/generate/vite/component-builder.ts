@@ -217,26 +217,14 @@ export function writeComponent(options: WriteComponentOptions): string {
     processedJsx = stripDebugAttributes(processedJsx);
   }
 
-  // Handle LESS module conversion
-  let lessContent: string | undefined;
-  let cssImportPath: string | undefined;
+  // Determine CSS import path (less-module: no import yet, added after conversion)
+  const cssImportPath = cssMode !== 'less-module' && includeCssImport ? './index.css' : undefined;
 
-  if (cssMode === 'less-module') {
-    // Convert Tailwind classes to LESS module
-    const lessResult = convertToLessModule(processedJsx, component.name);
-    processedJsx = lessResult.jsx;
-    lessContent = lessResult.less;
-    cssImportPath = './index.module.less';
-    customImportLines.unshift(generateLessImport('index.module.less'));
-  } else if (includeCssImport) {
-    cssImportPath = './index.css';
-  }
-
-  // Build component source with pre-extracted imports
+  // Build component source with tailwind classes (for less-module, LESS import added later)
   let tsxContent = buildComponentTsxWithImports({
     componentName: component.name,
     jsx: processedJsx,
-    cssImportPath: cssMode === 'less-module' ? undefined : cssImportPath, // LESS import is in customImportLines
+    cssImportPath,
     sliceImports,
     assetImportNames,
     customImportLines,
@@ -247,9 +235,22 @@ export function writeComponent(options: WriteComponentOptions): string {
     tsxContent = formatCode(tsxContent);
   }
 
-  // Optimize output if requested (only for tailwind mode, as LESS module has its own structure)
-  if (optimizeOutput && cssMode === 'tailwind') {
+  // Optimize output if requested — runs on tailwind classes, so always before LESS conversion
+  if (optimizeOutput) {
     tsxContent = optimizeReactComponent(tsxContent, optimizeOptions);
+  }
+
+  // Convert tailwind → LESS module AFTER all tailwind-based processing is done
+  let lessContent: string | undefined;
+  if (cssMode === 'less-module') {
+    const lessResult = convertToLessModule(tsxContent, component.name);
+    tsxContent = lessResult.jsx;
+    lessContent = lessResult.less;
+    // Insert LESS import right after the React import line
+    tsxContent = tsxContent.replace(
+      `import React from 'react';`,
+      `import React from 'react';\n${generateLessImport('index.module.less')}`
+    );
   }
 
   // Write files

@@ -60,11 +60,16 @@ const DEFAULT_OPTIONS: Partial<ViteGeneratorOptions> = {
 export async function generateViteComponents(
   options: ViteGeneratorOptions
 ): Promise<ViteGeneratorResult> {
+  // When outputDir is omitted, generate to a temp dir, zip to memory, then clean up
+  if (!options.outputDir) {
+    return _generateViteComponentsMemory(options);
+  }
+
   const opts = { ...DEFAULT_OPTIONS, ...options };
   const logger = opts.logger || defaultLogger;
 
   // Resolve paths
-  const outputDir = path.resolve(opts.outputDir);
+  const outputDir = path.resolve(opts.outputDir!);
   const assetsDir = opts.assetsDir
     ? path.resolve(opts.assetsDir)
     : path.join(outputDir, 'assets');
@@ -260,6 +265,49 @@ export function createViteGenerator(baseOptions: Partial<ViteGeneratorOptions>) 
      */
     getOptions: () => ({ ...DEFAULT_OPTIONS, ...baseOptions }),
   };
+}
+
+/**
+ * Internal: generate to a temp dir, zip to memory, clean up, return result with zipBuffer.
+ */
+async function _generateViteComponentsMemory(
+  options: ViteGeneratorOptions
+): Promise<ViteGeneratorResult> {
+  const logger = options.logger || defaultLogger;
+
+  const tempDir = path.join(
+    process.cwd(),
+    'temp',
+    `vite-gen-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  );
+
+  try {
+    const result = await generateViteComponents({ ...options, outputDir: tempDir });
+
+    const zipResult = await createZipArchive(
+      tempDir,
+      undefined,
+      {
+        info: () => {},
+        warn: logger.warn,
+        error: logger.error,
+      },
+      'generated'
+    );
+
+    logger.info(`Generated ZIP buffer: ${(zipResult.size / 1024).toFixed(2)} KB`);
+
+    return {
+      layout: { name: result.layout.name, width: result.layout.width, height: result.layout.height },
+      slices: result.slices.map((s) => ({ name: s.name, width: s.width, height: s.height })),
+      assets: result.assets,
+      zipBuffer: zipResult.buffer,
+    };
+  } finally {
+    if (fs.existsSync(tempDir)) {
+      fs.rmSync(tempDir, { recursive: true });
+    }
+  }
 }
 
 /**
