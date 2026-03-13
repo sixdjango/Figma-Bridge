@@ -185,6 +185,73 @@ export interface WriteComponentOptions {
   onWrite?: (name: string, width: number, height: number) => void;
 }
 
+/**
+ * Options for building component code string (without writing to disk)
+ */
+export interface BuildComponentStringOptions {
+  component: ReactComponentFile;
+  sliceImports?: string[];
+  sliceNames?: string[];
+  /** Whether to include CSS import (online mode sets this to false) */
+  includeCssImport?: boolean;
+  debug?: boolean;
+  formatOutput?: boolean;
+  /** Only 'tailwind' is supported for online/remote mode */
+  cssMode?: 'tailwind';
+  optimizeOutput?: boolean;
+  optimizeOptions?: OptimizeOptions;
+}
+
+/**
+ * Build component source code string without writing to disk.
+ * Tailwind-only — used by online/remote mode for network transmission.
+ */
+export function buildComponentString(options: BuildComponentStringOptions): string {
+  const {
+    component,
+    sliceImports = [],
+    sliceNames = [],
+    includeCssImport = false,
+    debug = false,
+    formatOutput = true,
+    optimizeOutput = false,
+    optimizeOptions,
+  } = options;
+
+  const assetImportNames = getAssetImportNames(component);
+
+  const sliceNameSet = new Set(sliceNames);
+  const customImports = extractCustomComponentImports(component.jsx)
+    .filter(imp => !sliceNameSet.has(imp.componentName));
+  const customImportLines = buildCustomComponentImportLines(customImports);
+
+  let processedJsx = component.jsx;
+  if (!debug) {
+    processedJsx = stripDebugAttributes(processedJsx);
+  }
+
+  const cssImportPath = includeCssImport ? './index.css' : undefined;
+
+  let tsxContent = buildComponentTsxWithImports({
+    componentName: component.name,
+    jsx: processedJsx,
+    cssImportPath,
+    sliceImports,
+    assetImportNames,
+    customImportLines,
+  });
+
+  if (formatOutput) {
+    tsxContent = formatCode(tsxContent);
+  }
+
+  if (optimizeOutput) {
+    tsxContent = optimizeReactComponent(tsxContent, optimizeOptions);
+  }
+
+  return tsxContent;
+}
+
 export function writeComponent(options: WriteComponentOptions): string {
   const {
     component,

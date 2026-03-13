@@ -20,11 +20,13 @@ import { figmaToReact } from 'figma-html-bridge';
 import type {
   ViteGeneratorOptions,
   ViteGeneratorResult,
+  ViteOnlineResult,
   FigmaToReactResult,
   Logger,
+  UploadedAssets,
 } from './types';
 import { ensureDir, cleanDir, defaultLogger, buildImportName, createZipArchive } from './utils';
-import { writeComponent, generateBarrelExport } from './component-builder';
+import { writeComponent, generateBarrelExport, buildComponentString } from './component-builder';
 import {
   copyAssets,
   buildAssetIndexEntries,
@@ -264,6 +266,128 @@ export function createViteGenerator(baseOptions: Partial<ViteGeneratorOptions>) 
      * Get resolved options
      */
     getOptions: () => ({ ...DEFAULT_OPTIONS, ...baseOptions }),
+  };
+}
+
+/**
+ * Create an asset URL provider that maps asset IDs to remote URLs
+ */
+function createOnlineAssetUrlProvider(uploadedAssets: UploadedAssets) {
+  return (id: string, type: 'image' | 'svg', data?: string): string => {
+    if (type === 'image') {
+      return uploadedAssets.images[id] || `${id}.png`;
+    }
+    if (type === 'svg') {
+      const svgId = id.endsWith('.svg') ? id.replace(/\.svg$/, '') : id;
+      return uploadedAssets.svgs[svgId] || uploadedAssets.svgs[id] || `${id}.svg`;
+    }
+    return id;
+  };
+}
+
+/**
+ * Generate Vite React components for online/remote mode.
+ *
+ * All assets (images + SVGs) are referenced as <img> tags with remote URLs
+ * from the uploadedAssets mapping. No files are written to disk, no ZIP is
+ * created — returns component source code strings ready for network transmission.
+ *
+ * @param options - Generator options (must include uploadedAssets)
+ * @returns Object with layout code string and array of slice code strings
+ *
+ * @example
+ * ```typescript
+ * const result = await generateViteOnline({
+ *   input: figmaJsonData,
+ *   uploadedAssets: {
+ *     images: { 'abc123': 'https://oss.example.com/abc123.png' },
+ *     svgs: { 'icon1': 'https://oss.example.com/icon1.svg' },
+ *   },
+ * });
+ *
+ * // result.layout is the Layout component source code
+ * // result.slices is an array of slice component source codes
+ * ```
+ */
+export async function generateViteOnline(
+  options: ViteGeneratorOptions & { uploadedAssets: UploadedAssets }
+): Promise<ViteOnlineResult> {
+  const opts = { ...DEFAULT_OPTIONS, ...options };
+  const logger = opts.logger || defaultLogger;
+
+  // Load input data
+  let inputData: object;
+  if (typeof opts.input === 'string') {
+    const inputPath = path.resolve(opts.input);
+    if (!fs.existsSync(inputPath)) {
+      throw new Error(`Input file not found: ${inputPath}`);
+    }
+    const rawJson = fs.readFileSync(inputPath, 'utf8');
+    inputData = JSON.parse(rawJson);
+    logger.info(`Loaded input from: ${inputPath}`);
+  } else {
+    inputData = opts.input;
+  }
+
+  // Generate React components with remote asset URLs
+  // Use 'none' import mode so assets stay as string URLs in JSX (no import statements)
+  logger.info('Generating React components (online mode)...');
+
+  const result: FigmaToReactResult = await figmaToReact(inputData, {
+    assetUrlProvider: createOnlineAssetUrlProvider(opts.uploadedAssets),
+    assetImportMode: {
+      svg: 'none',
+      image: 'none',
+    },
+    pxToRem: opts.pxToRem,
+  });
+
+  // Online mode is tailwind-only, no CSS import needed
+  const debug = opts.debug === true;
+  const formatOutput = opts.formatOutput !== false;
+  const optimizeOutput = opts.optimizeOutput === true;
+  const optimizeOptions = opts.optimizeOptions;
+
+  // Build slice component strings
+  const sliceStrings: string[] = [];
+  for (const slice of result.slices) {
+    const code = buildComponentString({
+      component: slice,
+      includeCssImport: false,
+      debug,
+      formatOutput,
+      cssMode: 'tailwind',
+      optimizeOutput,
+      optimizeOptions,
+    });
+    sliceStrings.push(code);
+  }
+
+  // Build layout component string with slice imports
+  const sliceImports = result.slices.map(
+    (s) => `import ${s.name} from '../${s.name}';`
+  );
+  const sliceNames = result.slices.map((s) => s.name);
+
+  const layoutCode = buildComponentString({
+    component: result.layout,
+    sliceImports,
+    sliceNames,
+    includeCssImport: false,
+    debug,
+    formatOutput,
+    cssMode: 'tailwind',
+    optimizeOutput,
+    optimizeOptions,
+  });
+
+  logger.info('Online generation complete!');
+  logger.info(`  Layout: ${result.layout.name}`);
+  logger.info(`  Slices: ${result.slices.length}`);
+
+  return {
+    layout: layoutCode,
+    slices: sliceStrings,
   };
 }
 

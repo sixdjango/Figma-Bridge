@@ -129,6 +129,22 @@ export interface ViteGeneratorOptions {
    * Optimization options (used when optimizeOutput is true)
    */
   optimizeOptions?: OptimizeOptions;
+  /**
+   * Uploaded assets mapping for online/remote mode.
+   * When provided, all SVG and image assets are rendered as <img> tags
+   * with remote URLs instead of local file imports.
+   */
+  uploadedAssets?: UploadedAssets;
+}
+
+/**
+ * Mapping of asset IDs to their remote URLs (e.g., OSS object storage)
+ */
+export interface UploadedAssets {
+  /** Map of image ID → remote URL */
+  images: Record<string, string>;
+  /** Map of SVG ID → remote URL */
+  svgs: Record<string, string>;
 }
 
 /**
@@ -169,6 +185,17 @@ export interface ViteGeneratorResult {
   zipPath?: string;
   /** ZIP file buffer (if outputZip was enabled) */
   zipBuffer?: Buffer;
+}
+
+/**
+ * Result of online/remote mode generation
+ * Returns component code as strings for network transmission
+ */
+export interface ViteOnlineResult {
+  /** Layout component source code */
+  layout: string;
+  /** Slice component source codes */
+  slices: string[];
 }
 
 /**
