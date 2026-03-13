@@ -192,10 +192,20 @@ export interface ViteGeneratorResult {
  * Returns component code as strings for network transmission
  */
 export interface ViteOnlineResult {
-  /** Layout component source code */
-  layout: string;
-  /** Slice component source codes */
-  slices: string[];
+  /** Layout component info */
+  layout: {
+    /** Component source code */
+    code: string;
+    /** UI preview image (base64 or empty string) */
+    uiImg: string;
+  };
+  /** Slice component info */
+  slices: Array<{
+    /** Component source code */
+    code: string;
+    /** UI preview image (base64 or empty string) */
+    uiImg: string;
+  }>;
 }
 
 /**

@@ -329,6 +329,19 @@ export async function generateViteOnline(
     inputData = opts.input;
   }
 
+  // Extract picBase64 from input data
+  const layoutData = (inputData as any)?.layout;
+  const layoutPicBase64: string = layoutData?.picBase64 || '';
+  const components: any[] = Array.isArray(layoutData?.components) ? layoutData.components : [];
+
+  // Build slice name → picBase64 mapping
+  const slicePicMap = new Map<string, string>();
+  for (const comp of components) {
+    if (String(comp?.componentType || '').toUpperCase() === 'SLICE' && comp?.type) {
+      slicePicMap.set(comp.type, comp.picBase64 || '');
+    }
+  }
+
   // Generate React components with remote asset URLs
   // Use 'none' import mode so assets stay as string URLs in JSX (no import statements)
   logger.info('Generating React components (online mode)...');
@@ -348,8 +361,8 @@ export async function generateViteOnline(
   const optimizeOutput = opts.optimizeOutput === true;
   const optimizeOptions = opts.optimizeOptions;
 
-  // Build slice component strings
-  const sliceStrings: string[] = [];
+  // Build slice results
+  const sliceResults: ViteOnlineResult['slices'] = [];
   for (const slice of result.slices) {
     const code = buildComponentString({
       component: slice,
@@ -360,7 +373,10 @@ export async function generateViteOnline(
       optimizeOutput,
       optimizeOptions,
     });
-    sliceStrings.push(code);
+    sliceResults.push({
+      code,
+      uiImg: slicePicMap.get(slice.name) || '',
+    });
   }
 
   // Build layout component string with slice imports
@@ -386,8 +402,8 @@ export async function generateViteOnline(
   logger.info(`  Slices: ${result.slices.length}`);
 
   return {
-    layout: layoutCode,
-    slices: sliceStrings,
+    layout: { code: layoutCode, uiImg: layoutPicBase64 },
+    slices: sliceResults,
   };
 }
 

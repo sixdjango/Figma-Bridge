@@ -86,27 +86,29 @@ async function main() {
     console.log('\n' + '='.repeat(60));
     console.log('LAYOUT COMPONENT');
     console.log('='.repeat(60));
-    console.log(result.layout);
+    console.log(result.layout.code);
+    console.log(`  uiImg: ${result.layout.uiImg ? result.layout.uiImg.substring(0, 50) + '...' : '(empty)'}`);
 
     // Print slice components
-    result.slices.forEach((code, i) => {
+    result.slices.forEach((slice, i) => {
       console.log('\n' + '='.repeat(60));
       console.log(`SLICE ${i + 1}`);
       console.log('='.repeat(60));
-      console.log(code);
+      console.log(slice.code);
+      console.log(`  uiImg: ${slice.uiImg ? slice.uiImg.substring(0, 50) + '...' : '(empty)'}`);
     });
 
     // Summary
     console.log('\n' + '='.repeat(60));
     console.log('[generate-online] Done!');
-    console.log(`  Layout length: ${result.layout.length} chars`);
+    console.log(`  Layout: ${result.layout.code.length} chars, uiImg: ${result.layout.uiImg.length} chars`);
     console.log(`  Slices: ${result.slices.length}`);
-    result.slices.forEach((code, i) => {
-      console.log(`    Slice ${i + 1}: ${code.length} chars`);
+    result.slices.forEach((slice, i) => {
+      console.log(`    Slice ${i + 1}: ${slice.code.length} chars, uiImg: ${slice.uiImg.length} chars`);
     });
 
     // Verify no local import/require of assets
-    const allCode = [result.layout, ...result.slices].join('\n');
+    const allCode = [result.layout.code, ...result.slices.map(s => s.code)].join('\n');
     const hasAssetImport = /from\s+['"]\.\.\/assets/.test(allCode);
     const hasOssUrl = allCode.includes(OSS_BASE);
     console.log(`\n  Asset imports (should be false): ${hasAssetImport}`);
