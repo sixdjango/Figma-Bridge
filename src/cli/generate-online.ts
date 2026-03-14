@@ -11,8 +11,8 @@
 
 import path from 'path';
 import fs from 'fs';
-import { generateViteOnline } from '../generate/vite';
-import type { UploadedAssets } from '../generate/vite/types';
+import { generateViteOnline } from '@figma-bridge/generator';
+import type { UploadedAssets } from '@figma-bridge/generator';
 
 // Default mock file
 const inputArg = process.argv[2];

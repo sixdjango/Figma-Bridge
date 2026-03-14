@@ -14,7 +14,7 @@
  */
 
 import path from 'path';
-import { generateViteComponents } from '../generate/vite';
+import { generateViteComponents } from '@figma-bridge/generator';
 
 // Configuration
 const MOCK_FILE = path.join(process.cwd(), 'examples/mock/component_demo_composition.json');

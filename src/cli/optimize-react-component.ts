@@ -10,8 +10,8 @@
 import * as fs from "fs";
 import * as path from "path";
 // Use AST-based optimizer
-import { optimizeReactComponent } from "../generate/vite/optimizer";
-import type { OptimizeOptions } from "../generate/vite/optimizer";
+import { optimizeReactComponent } from "@figma-bridge/generator";
+import type { OptimizeOptions } from "@figma-bridge/generator";
 
 interface CliOptions extends OptimizeOptions {
   removeDebugClasses?: boolean;

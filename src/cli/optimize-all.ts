@@ -12,7 +12,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
-import { optimizeReactComponent } from "../generate/vite/optimizer";
+import { optimizeReactComponent } from "@figma-bridge/generator";
 
 const DEBUG_CLASS_NAMES = [
   "frame",

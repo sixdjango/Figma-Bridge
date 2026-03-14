@@ -8,7 +8,7 @@
 
 import path from 'path';
 import fs from 'fs';
-import { generateViteZipBuffer } from '../generate/vite';
+import { generateViteZipBuffer } from '@figma-bridge/generator';
 
 // Configuration
 const MOCK_FILE = path.join(process.cwd(), 'examples/mock/component_image_composition.json');
