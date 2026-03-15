@@ -936,6 +936,8 @@ function nodeToJsx(node: any, depth: number, options: ReactifyOptions): string {
     // Handle component prop attributes (data-component-prop-*)
     if (attrLower.startsWith('data-component-prop-')) {
       const propName = attr.slice('data-component-prop-'.length);
+      // children should be rendered as JSX children, not as a prop attribute
+      if (propName === 'children') continue;
       const val = node.getAttribute(attr) ?? '';
       const compProp = parseComponentProp(val);
       if (compProp) {
@@ -982,12 +984,19 @@ function nodeToJsx(node: any, depth: number, options: ReactifyOptions): string {
         .map((ch: any) => nodeToJsx(ch, depth + (options.indent || 2), options))
         .filter(Boolean);
 
-  // Check for component children defined in the 'children' attribute
+  // Check for component children defined in the 'children' or 'data-component-prop-children' attribute
   let componentChildrenJsx = '';
-  const childrenAttr = node.getAttribute('children');
-  if (childrenAttr) {
+  const childrenAttrRaw = node.getAttribute('children');
+  const childrenCompPropAttr = node.getAttribute('data-component-prop-children');
+  if (childrenCompPropAttr) {
+    // data-component-prop-children is Base64-encoded ComponentPropDef
+    const compProp = parseComponentProp(childrenCompPropAttr);
+    if (compProp) {
+      componentChildrenJsx = componentPropToJsx(compProp, options);
+    }
+  } else if (childrenAttrRaw) {
     try {
-      const parsed = JSON.parse(childrenAttr);
+      const parsed = JSON.parse(childrenAttrRaw);
       if (Array.isArray(parsed)) {
         // Array of component definitions (including nodeId references)
         const childJsxParts = parsed
@@ -1000,7 +1009,7 @@ function nodeToJsx(node: any, depth: number, options: ReactifyOptions): string {
       }
     } catch {
       // Not valid JSON, treat as string children
-      componentChildrenJsx = childrenAttr;
+      componentChildrenJsx = childrenAttrRaw;
     }
   }
 
